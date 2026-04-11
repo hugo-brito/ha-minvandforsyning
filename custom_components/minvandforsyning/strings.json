@@ -1,0 +1,41 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MinVandforsyning",
+        "description": "Enter your water meter number. You can find it on the minvandforsyning.dk page header or on your water bill.",
+        "data": {
+          "meter_number": "Meter number"
+        }
+      },
+      "confirm": {
+        "title": "Confirm meter",
+        "description": "Found meter {meter_number} at supplier {supplier_id}.\n\nLatest reading: {latest_reading} m³\n\nDo you want to add this meter?"
+      }
+    },
+    "error": {
+      "invalid_meter_number": "Please enter a valid meter number."
+    },
+    "abort": {
+      "already_configured": "This meter is already configured.",
+      "cannot_connect": "Could not connect to the MinVandforsyning API.",
+      "meter_not_found": "Could not find data for this meter number. Please verify the number and try again."
+    },
+    "error": {
+      "invalid_meter_number": "Please enter a valid meter number."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "total": {
+        "name": "Total consumption"
+      },
+      "hourly": {
+        "name": "Hourly consumption"
+      },
+      "daily": {
+        "name": "Daily consumption"
+      }
+    }
+  }
+}
