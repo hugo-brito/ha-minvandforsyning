@@ -31,6 +31,10 @@ Thumbs.db
 .github/agents/
 .github/instructions/
 .github/prompts/
+.copilotignore
+
+# VS Code (local only)
+.vscode/
 
 # Secrets
 .env
