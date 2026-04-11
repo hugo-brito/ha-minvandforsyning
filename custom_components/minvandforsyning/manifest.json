@@ -1,0 +1,13 @@
+{
+  "domain": "minvandforsyning",
+  "name": "MinVandforsyning",
+  "codeowners": ["@hugo-brito"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/hugo-brito/ha-minvandforsyning",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/hugo-brito/ha-minvandforsyning/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

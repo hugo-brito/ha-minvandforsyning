@@ -1,0 +1,41 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MinVandforsyning",
+        "description": "Indtast dit vandmåler-nummer. Du kan finde det på minvandforsyning.dk i sidehovedet eller på din vandregning.",
+        "data": {
+          "meter_number": "Målernummer"
+        }
+      },
+      "confirm": {
+        "title": "Bekræft måler",
+        "description": "Fundet måler {meter_number} hos forsyning {supplier_id}.\n\nSeneste aflæsning: {latest_reading} m³\n\nVil du tilføje denne måler?"
+      }
+    },
+    "error": {
+      "invalid_meter_number": "Indtast et gyldigt målernummer."
+    },
+    "abort": {
+      "already_configured": "Denne måler er allerede konfigureret.",
+      "cannot_connect": "Kunne ikke oprette forbindelse til MinVandforsyning API.",
+      "meter_not_found": "Kunne ikke finde data for dette målernummer. Kontroller nummeret og prøv igen."
+    },
+    "error": {
+      "invalid_meter_number": "Indtast venligst et gyldigt målernummer."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "total": {
+        "name": "Samlet forbrug"
+      },
+      "hourly": {
+        "name": "Timeforbrug"
+      },
+      "daily": {
+        "name": "Dagligt forbrug"
+      }
+    }
+  }
+}
