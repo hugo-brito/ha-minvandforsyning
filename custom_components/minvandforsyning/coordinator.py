@@ -163,16 +163,25 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         # Extract analysis data from Tables 3-6 (optional, don't fail if missing)
         analysis_kwargs: dict[str, Any] = {}
 
+        # Table 3: AcuteNightConsumption (index 2)
+        # Contains: zero consumption count, high alert count, real readings count
+        if len(tables) > ACUTE_NIGHT_TABLE_INDEX:
+            acute_night = tables[ACUTE_NIGHT_TABLE_INDEX]
+            if acute_night.rows:
+                row = acute_night.rows[0]
+                analysis_kwargs["zero_consumption_hours"] = row.get(COL_ZERO_COUNT)
+                analysis_kwargs["high_consumption_hours"] = row.get(COL_HIGH_ALERT_COUNT)
+                analysis_kwargs["real_readings_count"] = row.get(COL_REAL_READINGS_COUNT)
+
         # Table 4: FullDayConsumption (index 3)
+        # Contains: minimum hourly consumption, latest zero consumption timestamp
         if len(tables) > FULL_DAY_TABLE_INDEX:
             full_day = tables[FULL_DAY_TABLE_INDEX]
             if full_day.rows:
                 row = full_day.rows[0]
                 analysis_kwargs["min_hourly_consumption"] = row.get(COL_MIN_HOURLY)
+                # LatestZeroConsumption is a String, not DateTime - store as-is
                 analysis_kwargs["latest_zero_consumption"] = row.get(COL_LATEST_ZERO)
-                analysis_kwargs["zero_consumption_hours"] = row.get(COL_ZERO_COUNT)
-                analysis_kwargs["high_consumption_hours"] = row.get(COL_HIGH_ALERT_COUNT)
-                analysis_kwargs["real_readings_count"] = row.get(COL_REAL_READINGS_COUNT)
 
         # Table 5: HistoricalNightConsumption (index 4)
         if len(tables) > HISTORICAL_NIGHT_TABLE_INDEX:
@@ -180,13 +189,6 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             if hist_night.rows:
                 row = hist_night.rows[0]
                 analysis_kwargs["night_consumption_total"] = row.get(COL_TOTAL_NIGHT)
-                analysis_kwargs["nights_with_continuous_flow"] = row.get(COL_NIGHTS_CONTINUOUS)
-
-        # Table 3: AcuteNightConsumption (index 2) - fallback for nights count
-        if "nights_with_continuous_flow" not in analysis_kwargs and len(tables) > ACUTE_NIGHT_TABLE_INDEX:
-            acute_night = tables[ACUTE_NIGHT_TABLE_INDEX]
-            if acute_night.rows:
-                row = acute_night.rows[0]
                 analysis_kwargs["nights_with_continuous_flow"] = row.get(COL_NIGHTS_CONTINUOUS)
 
         # Table 6: InfoCode (index 5)

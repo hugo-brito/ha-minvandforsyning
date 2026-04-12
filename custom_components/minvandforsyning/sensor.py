@@ -75,7 +75,7 @@ SENSOR_DESCRIPTIONS: tuple[MinvandforsyningSensorDescription, ...] = (
     MinvandforsyningSensorDescription(
         key="latest_zero_consumption",
         translation_key="latest_zero_consumption",
-        device_class=SensorDeviceClass.TIMESTAMP,
+        # API returns this as a String, not a DateTime - display as-is
         value_fn=lambda data: data.latest_zero_consumption,
     ),
     MinvandforsyningSensorDescription(
