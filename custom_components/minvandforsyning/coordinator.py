@@ -12,11 +12,24 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api_client import MinvandforsyningClient
 from .const import (
+    ACUTE_NIGHT_TABLE_INDEX,
     COL_CONSUMPTION,
+    COL_HIGH_ALERT_COUNT,
+    COL_INFO_CODE_ACTIVE,
+    COL_INFO_CODE_VALUE,
+    COL_LATEST_ZERO,
+    COL_MIN_HOURLY,
+    COL_NIGHTS_CONTINUOUS,
     COL_READING,
     COL_READING_DATE,
+    COL_REAL_READINGS_COUNT,
+    COL_TOTAL_NIGHT,
+    COL_ZERO_COUNT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    FULL_DAY_TABLE_INDEX,
+    HISTORICAL_NIGHT_TABLE_INDEX,
+    INFO_CODE_TABLE_INDEX,
     QUERY_LOOKBACK_HOURS,
     READINGS_TABLE_INDEX,
 )
@@ -39,8 +52,29 @@ class MeterReading:
 class MinvandforsyningData:
     """Processed data from the API."""
 
-    def __init__(self, readings: list[MeterReading]) -> None:
+    def __init__(
+        self,
+        readings: list[MeterReading],
+        min_hourly_consumption: Decimal | None = None,
+        latest_zero_consumption: datetime | None = None,
+        zero_consumption_hours: int | None = None,
+        high_consumption_hours: int | None = None,
+        real_readings_count: int | None = None,
+        night_consumption_total: Decimal | None = None,
+        nights_with_continuous_flow: int | None = None,
+        info_code_active: bool | None = None,
+        info_code_value: int | None = None,
+    ) -> None:
         self.readings = readings
+        self.min_hourly_consumption = min_hourly_consumption
+        self.latest_zero_consumption = latest_zero_consumption
+        self.zero_consumption_hours = zero_consumption_hours
+        self.high_consumption_hours = high_consumption_hours
+        self.real_readings_count = real_readings_count
+        self.night_consumption_total = night_consumption_total
+        self.nights_with_continuous_flow = nights_with_continuous_flow
+        self.info_code_active = info_code_active
+        self.info_code_value = info_code_value
 
     @property
     def latest_reading(self) -> MeterReading | None:
@@ -125,4 +159,42 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             self._meter_number,
             readings[-1].date if readings else "none",
         )
-        return MinvandforsyningData(readings)
+
+        # Extract analysis data from Tables 3-6 (optional, don't fail if missing)
+        analysis_kwargs: dict[str, Any] = {}
+
+        # Table 4: FullDayConsumption (index 3)
+        if len(tables) > FULL_DAY_TABLE_INDEX:
+            full_day = tables[FULL_DAY_TABLE_INDEX]
+            if full_day.rows:
+                row = full_day.rows[0]
+                analysis_kwargs["min_hourly_consumption"] = row.get(COL_MIN_HOURLY)
+                analysis_kwargs["latest_zero_consumption"] = row.get(COL_LATEST_ZERO)
+                analysis_kwargs["zero_consumption_hours"] = row.get(COL_ZERO_COUNT)
+                analysis_kwargs["high_consumption_hours"] = row.get(COL_HIGH_ALERT_COUNT)
+                analysis_kwargs["real_readings_count"] = row.get(COL_REAL_READINGS_COUNT)
+
+        # Table 5: HistoricalNightConsumption (index 4)
+        if len(tables) > HISTORICAL_NIGHT_TABLE_INDEX:
+            hist_night = tables[HISTORICAL_NIGHT_TABLE_INDEX]
+            if hist_night.rows:
+                row = hist_night.rows[0]
+                analysis_kwargs["night_consumption_total"] = row.get(COL_TOTAL_NIGHT)
+                analysis_kwargs["nights_with_continuous_flow"] = row.get(COL_NIGHTS_CONTINUOUS)
+
+        # Table 3: AcuteNightConsumption (index 2) - fallback for nights count
+        if "nights_with_continuous_flow" not in analysis_kwargs and len(tables) > ACUTE_NIGHT_TABLE_INDEX:
+            acute_night = tables[ACUTE_NIGHT_TABLE_INDEX]
+            if acute_night.rows:
+                row = acute_night.rows[0]
+                analysis_kwargs["nights_with_continuous_flow"] = row.get(COL_NIGHTS_CONTINUOUS)
+
+        # Table 6: InfoCode (index 5)
+        if len(tables) > INFO_CODE_TABLE_INDEX:
+            info_code_table = tables[INFO_CODE_TABLE_INDEX]
+            if info_code_table.rows:
+                row = info_code_table.rows[0]
+                analysis_kwargs["info_code_active"] = row.get(COL_INFO_CODE_ACTIVE)
+                analysis_kwargs["info_code_value"] = row.get(COL_INFO_CODE_VALUE)
+
+        return MinvandforsyningData(readings, **analysis_kwargs)

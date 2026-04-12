@@ -27,7 +27,7 @@ from .coordinator import MinvandforsyningCoordinator, MinvandforsyningData
 class MinvandforsyningSensorDescription(SensorEntityDescription):
     """Describes a MinVandforsyning sensor."""
 
-    value_fn: Callable[[MinvandforsyningData], Decimal | None]
+    value_fn: Callable[[MinvandforsyningData], Any]
     extra_attrs_fn: Callable[[MinvandforsyningData], dict[str, Any]] | None = None
 
 
@@ -62,6 +62,53 @@ SENSOR_DESCRIPTIONS: tuple[MinvandforsyningSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfVolume.LITERS,
         suggested_display_precision=0,
         value_fn=lambda data: data.daily_liters(),
+    ),
+    MinvandforsyningSensorDescription(
+        key="min_hourly_consumption",
+        translation_key="min_hourly_consumption",
+        device_class=SensorDeviceClass.WATER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfVolume.LITERS,
+        suggested_display_precision=0,
+        value_fn=lambda data: data.min_hourly_consumption,
+    ),
+    MinvandforsyningSensorDescription(
+        key="latest_zero_consumption",
+        translation_key="latest_zero_consumption",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda data: data.latest_zero_consumption,
+    ),
+    MinvandforsyningSensorDescription(
+        key="zero_consumption_hours",
+        translation_key="zero_consumption_hours",
+        state_class=SensorStateClass.TOTAL,
+        native_unit_of_measurement="h",
+        suggested_display_precision=0,
+        value_fn=lambda data: data.zero_consumption_hours,
+    ),
+    MinvandforsyningSensorDescription(
+        key="high_consumption_hours",
+        translation_key="high_consumption_hours",
+        state_class=SensorStateClass.TOTAL,
+        native_unit_of_measurement="h",
+        suggested_display_precision=0,
+        value_fn=lambda data: data.high_consumption_hours,
+    ),
+    MinvandforsyningSensorDescription(
+        key="night_consumption_total",
+        translation_key="night_consumption_total",
+        device_class=SensorDeviceClass.WATER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfVolume.LITERS,
+        suggested_display_precision=0,
+        value_fn=lambda data: data.night_consumption_total,
+    ),
+    MinvandforsyningSensorDescription(
+        key="nights_with_continuous_flow",
+        translation_key="nights_with_continuous_flow",
+        state_class=SensorStateClass.TOTAL,
+        suggested_display_precision=0,
+        value_fn=lambda data: data.nights_with_continuous_flow,
     ),
 )
 
@@ -105,7 +152,7 @@ class MinvandforsyningSensor(
         }
 
     @property
-    def native_value(self) -> Decimal | None:
+    def native_value(self) -> Any:
         if self.coordinator.data is None:
             return None
         return self.entity_description.value_fn(self.coordinator.data)
