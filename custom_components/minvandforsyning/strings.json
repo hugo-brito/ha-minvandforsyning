@@ -20,9 +20,6 @@
       "already_configured": "This meter is already configured.",
       "cannot_connect": "Could not connect to the MinVandforsyning API.",
       "meter_not_found": "Could not find data for this meter number. Please verify the number and try again."
-    },
-    "error": {
-      "invalid_meter_number": "Please enter a valid meter number."
     }
   },
   "entity": {
@@ -35,6 +32,29 @@
       },
       "daily": {
         "name": "Daily consumption"
+      },
+      "min_hourly_consumption": {
+        "name": "Minimum hourly consumption"
+      },
+      "latest_zero_consumption": {
+        "name": "Latest zero consumption"
+      },
+      "zero_consumption_hours": {
+        "name": "Zero consumption hours"
+      },
+      "high_consumption_hours": {
+        "name": "High consumption hours"
+      },
+      "night_consumption_total": {
+        "name": "Night consumption total"
+      },
+      "nights_with_continuous_flow": {
+        "name": "Nights with continuous flow"
+      }
+    },
+    "binary_sensor": {
+      "meter_problem": {
+        "name": "Meter problem"
       }
     }
   }
