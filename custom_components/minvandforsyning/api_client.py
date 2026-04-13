@@ -67,9 +67,9 @@ class MinvandforsyningClient:
             raise RuntimeError(f"Token request failed: {errors}")
 
         token_data = data["payload"]
-        # Parse expiry from the response; subtract 2 min buffer
+        # Parse expiry from the response; subtract 5 min buffer
         expiry_str = token_data["expiry"]
-        expires_at = datetime.fromisoformat(expiry_str.replace("Z", "+00:00")) - timedelta(minutes=2)
+        expires_at = datetime.fromisoformat(expiry_str.replace("Z", "+00:00")) - timedelta(minutes=5)
 
         self._tokens = AuthTokens(
             context_token=token_data["anonymousUserContextToken"],
@@ -103,7 +103,7 @@ class MinvandforsyningClient:
         async with self._session.get(url, params=params, headers=headers) as resp:
             if resp.status == 401:
                 # Token expired mid-session; force refresh and retry once
-                _LOGGER.debug("Got 401, refreshing tokens and retrying")
+                _LOGGER.warning("Received HTTP 401 from API; invalidating cached tokens and retrying")
                 self._tokens = None
                 tokens = await self.async_get_tokens()
                 headers = {
