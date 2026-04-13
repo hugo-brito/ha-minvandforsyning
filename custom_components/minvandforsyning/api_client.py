@@ -101,6 +101,18 @@ class MinvandforsyningClient:
             CONTEXT_TOKEN_HEADER: tokens.context_token,
         }
         async with self._session.get(url, params=params, headers=headers) as resp:
+            if resp.status == 401:
+                # Token expired mid-session; force refresh and retry once
+                _LOGGER.debug("Got 401, refreshing tokens and retrying")
+                self._tokens = None
+                tokens = await self.async_get_tokens()
+                headers = {
+                    "Authorization": f"Bearer {tokens.easy_auth_token}",
+                    CONTEXT_TOKEN_HEADER: tokens.context_token,
+                }
+                async with self._session.get(url, params=params, headers=headers) as retry_resp:
+                    retry_resp.raise_for_status()
+                    return await retry_resp.read()
             resp.raise_for_status()
             return await resp.read()
 
