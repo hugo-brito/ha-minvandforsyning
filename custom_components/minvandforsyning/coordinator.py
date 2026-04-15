@@ -91,7 +91,8 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         """Fetch and parse meter data."""
         now = datetime.now(timezone.utc)
         date_from = now - timedelta(hours=QUERY_LOOKBACK_HOURS)
-        date_to = now
+        # DateTo is exclusive in the API — use tomorrow to include today's data
+        date_to = now + timedelta(days=1)
 
         try:
             raw = await self._client.async_get_meter_data(
