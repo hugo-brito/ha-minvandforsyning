@@ -10,7 +10,7 @@ Reads your water meter data directly from the Ramboll API - no scraping, no brow
 - Total consumption (m3) - works with HA's Water dashboard and Long-Term Statistics
 - Hourly consumption (liters)
 - Daily consumption (liters)
-- Polls every 2 hours
+- Configurable polling interval (default: every 2 hours)
 
 ## Requirements
 
@@ -38,6 +38,15 @@ Reads your water meter data directly from the Ramboll API - no scraping, no brow
 2. Search for **MinVandforsyning**
 3. Enter your meter number
 4. The integration auto-discovers your water supplier and shows the latest reading for confirmation
+
+## Configuration
+
+After setup, you can adjust the polling interval:
+
+1. Go to **Settings** > **Devices & Services** > **MinVandforsyning** > **Configure**
+2. Set the **Polling interval** (10 - 1440 minutes, default 120)
+
+Changes apply immediately without restarting Home Assistant.
 
 ## Sensors
 
