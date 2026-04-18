@@ -67,15 +67,16 @@ class TestCoordinatorScanInterval:
 # ---------------------------------------------------------------------------
 
 class TestOptionsFlowSchema:
-    """Options flow must validate minutes input and store seconds."""
+    """Options flow must validate minutes input and store seconds.
+
+    The schema validates minutes; conversion to seconds happens in async_step_init.
+    """
 
     def _get_options_schema(self, current_seconds: int = DEFAULT_SCAN_INTERVAL):
         """Build the options schema the same way the flow does."""
         from custom_components.minvandforsyning.config_flow import (
             MinvandforsyningOptionsFlow,
         )
-        # We just need the vol.Schema - extract it by inspecting the class
-        # Build it from the PRD spec to validate the contract
         return vol.Schema({
             vol.Required(
                 CONF_SCAN_INTERVAL,
@@ -83,29 +84,28 @@ class TestOptionsFlowSchema:
             ): vol.All(
                 vol.Coerce(int),
                 vol.Range(min=MIN_SCAN_INTERVAL // 60, max=MAX_SCAN_INTERVAL // 60),
-                lambda m: m * 60,
             ),
         })
 
     def test_valid_30_minutes(self):
         schema = self._get_options_schema()
         result = schema({CONF_SCAN_INTERVAL: 30})
-        assert result[CONF_SCAN_INTERVAL] == 1800
+        assert result[CONF_SCAN_INTERVAL] == 30
 
     def test_valid_120_minutes_default(self):
         schema = self._get_options_schema()
         result = schema({CONF_SCAN_INTERVAL: 120})
-        assert result[CONF_SCAN_INTERVAL] == 7200
+        assert result[CONF_SCAN_INTERVAL] == 120
 
     def test_valid_1440_minutes_max(self):
         schema = self._get_options_schema()
         result = schema({CONF_SCAN_INTERVAL: 1440})
-        assert result[CONF_SCAN_INTERVAL] == 86400
+        assert result[CONF_SCAN_INTERVAL] == 1440
 
     def test_valid_10_minutes_min(self):
         schema = self._get_options_schema()
         result = schema({CONF_SCAN_INTERVAL: 10})
-        assert result[CONF_SCAN_INTERVAL] == 600
+        assert result[CONF_SCAN_INTERVAL] == 10
 
     def test_rejects_below_minimum(self):
         schema = self._get_options_schema()

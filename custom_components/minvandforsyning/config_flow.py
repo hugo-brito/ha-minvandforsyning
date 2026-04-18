@@ -144,6 +144,8 @@ class MinvandforsyningOptionsFlow(OptionsFlow):
     ) -> dict[str, Any]:
         """Manage the polling interval option."""
         if user_input is not None:
+            # Convert minutes to seconds for storage
+            user_input[CONF_SCAN_INTERVAL] = user_input[CONF_SCAN_INTERVAL] * 60
             return self.async_create_entry(title="", data=user_input)
 
         current = self.config_entry.options.get(
@@ -163,7 +165,6 @@ class MinvandforsyningOptionsFlow(OptionsFlow):
                             min=MIN_SCAN_INTERVAL // 60,
                             max=MAX_SCAN_INTERVAL // 60,
                         ),
-                        lambda m: m * 60,
                     ),
                 }
             ),
