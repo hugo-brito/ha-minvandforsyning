@@ -168,7 +168,7 @@ class TestInitReadsOptions:
 
 class TestConstants:
     def test_default_scan_interval(self):
-        assert DEFAULT_SCAN_INTERVAL == 7200
+        assert DEFAULT_SCAN_INTERVAL == 3600
 
     def test_min_scan_interval(self):
         assert MIN_SCAN_INTERVAL == 600
