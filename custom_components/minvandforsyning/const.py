@@ -21,7 +21,7 @@ DEFAULT_SCAN_INTERVAL = 7200  # 2 hours in seconds
 QUERY_LOOKBACK_HOURS = 48
 
 SUPPLIER_ID_SCAN_MIN = 1
-SUPPLIER_ID_SCAN_MAX = 300
+SUPPLIER_ID_SCAN_MAX = 500
 SUPPLIER_DISCOVERY_THRESHOLD_BYTES = 910  # empty schema ~903 bytes
 
 # Table index for hourly meter readings in the protobuf DataSet
