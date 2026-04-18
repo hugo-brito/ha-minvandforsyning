@@ -14,6 +14,9 @@ METHOD_NAME = "CP_GetAnalysisDetailsForMeter"
 
 CONTEXT_TOKEN_HEADER = "X-Context-Token"
 
+CONF_SCAN_INTERVAL = "scan_interval"
+MIN_SCAN_INTERVAL = 600    # 10 minutes in seconds
+MAX_SCAN_INTERVAL = 86400  # 24 hours in seconds
 DEFAULT_SCAN_INTERVAL = 7200  # 2 hours in seconds
 QUERY_LOOKBACK_HOURS = 48
 

@@ -7,11 +7,20 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api_client import MinvandforsyningClient
-from .const import COL_READING, DOMAIN, READINGS_TABLE_INDEX
+from .const import (
+    COL_READING,
+    CONF_SCAN_INTERVAL,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    MAX_SCAN_INTERVAL,
+    MIN_SCAN_INTERVAL,
+    READINGS_TABLE_INDEX,
+)
 from .protobuf_parser import parse_dataset
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,6 +36,12 @@ class MinvandforsyningConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for MinVandforsyning."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Return the options flow handler."""
+        return MinvandforsyningOptionsFlow()
 
     def __init__(self) -> None:
         self._meter_number: str = ""
@@ -118,4 +133,38 @@ class MinvandforsyningConfigFlow(ConfigFlow, domain=DOMAIN):
                 "supplier_id": str(self._supplier_id),
                 "latest_reading": self._latest_reading,
             },
+        )
+
+
+class MinvandforsyningOptionsFlow(OptionsFlow):
+    """Handle options for MinVandforsyning."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Manage the polling interval option."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current = self.config_entry.options.get(
+            CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+        )
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_SCAN_INTERVAL,
+                        default=current // 60,
+                    ): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(
+                            min=MIN_SCAN_INTERVAL // 60,
+                            max=MAX_SCAN_INTERVAL // 60,
+                        ),
+                        lambda m: m * 60,
+                    ),
+                }
+            ),
         )

@@ -20,9 +20,16 @@
       "already_configured": "This meter is already configured.",
       "cannot_connect": "Could not connect to the MinVandforsyning API.",
       "meter_not_found": "Could not find data for this meter number. Please verify the number and try again."
-    },
-    "error": {
-      "invalid_meter_number": "Please enter a valid meter number."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MinVandforsyning settings",
+        "data": {
+          "scan_interval": "Polling interval (minutes)"
+        }
+      }
     }
   },
   "entity": {
