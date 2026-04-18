@@ -48,7 +48,6 @@ SENSOR_DESCRIPTIONS: tuple[MinvandforsyningSensorDescription, ...] = (
     MinvandforsyningSensorDescription(
         key="hourly",
         translation_key="hourly",
-        device_class=SensorDeviceClass.WATER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfVolume.LITERS,
         suggested_display_precision=0,
@@ -57,7 +56,6 @@ SENSOR_DESCRIPTIONS: tuple[MinvandforsyningSensorDescription, ...] = (
     MinvandforsyningSensorDescription(
         key="daily",
         translation_key="daily",
-        device_class=SensorDeviceClass.WATER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfVolume.LITERS,
         suggested_display_precision=0,
