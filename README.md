@@ -22,8 +22,10 @@ Reads your water meter data directly from the Ramboll API - no scraping, no brow
 ### HACS (recommended)
 
 1. Open HACS in Home Assistant
-2. Search for "MinVandforsyning" and install it
-3. Restart Home Assistant
+2. Click the three dots in the top right and select **Custom repositories**
+3. Add `https://github.com/hugo-brito/ha-minvandforsyning` with category **Integration**
+4. Search for "MinVandforsyning" and install it
+5. Restart Home Assistant
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=hugo-brito&repository=ha-minvandforsyning)
 
