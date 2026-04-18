@@ -76,12 +76,13 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         client: MinvandforsyningClient,
         meter_number: str,
         supplier_id: int,
+        scan_interval: int = DEFAULT_SCAN_INTERVAL,
     ) -> None:
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
+            update_interval=timedelta(seconds=scan_interval),
         )
         self._client = client
         self._meter_number = meter_number

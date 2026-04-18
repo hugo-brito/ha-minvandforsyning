@@ -20,9 +20,16 @@
       "already_configured": "Denne måler er allerede konfigureret.",
       "cannot_connect": "Kunne ikke oprette forbindelse til MinVandforsyning API.",
       "meter_not_found": "Kunne ikke finde data for dette målernummer. Kontroller nummeret og prøv igen."
-    },
-    "error": {
-      "invalid_meter_number": "Indtast venligst et gyldigt målernummer."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MinVandforsyning indstillinger",
+        "data": {
+          "scan_interval": "Opdateringsinterval (minutter)"
+        }
+      }
     }
   },
   "entity": {
