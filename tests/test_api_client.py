@@ -272,11 +272,11 @@ class TestTokenRefreshOn401:
         assert any(r.levelno == logging.WARNING for r in caplog.records if "401" in r.message)
 
     @pytest.mark.asyncio
-    async def test_non_401_error_not_retried(self, client, mock_session):
-        """Non-401 HTTP errors are raised immediately without retry."""
+    async def test_non_401_4xx_not_retried(self, client, mock_session):
+        """Non-401 client errors (e.g. 400) are raised immediately without retry."""
         from aiohttp import ClientResponseError
 
-        fail_resp = self._make_resp(status=500)
+        fail_resp = self._make_resp(status=400)
         mock_session.get = MagicMock(return_value=fail_resp)
 
         with pytest.raises(ClientResponseError) as exc_info:
@@ -284,9 +284,210 @@ class TestTokenRefreshOn401:
                 "12345678", 15,
                 datetime(2026, 1, 1), datetime(2026, 4, 11),
             )
-        assert exc_info.value.status == 500
-        # Only one call - no retry for 500
+        assert exc_info.value.status == 400
+        # No retry for 400 - client errors are permanent
         assert mock_session.get.call_count == 1
+
+
+class TestTransientErrorRetry:
+    """Retries on transient failures (5xx, 429, network, timeout) with backoff.
+
+    Keeps LTS clean: transient hiccups don't turn into UpdateFailed that marks
+    the entity unknown during HA's setup retry window.
+    """
+
+    @pytest.fixture
+    def mock_session(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def client(self, mock_session):
+        c = MinvandforsyningClient(mock_session)
+        c._tokens = AuthTokens(
+            "ctx", "auth",
+            datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        return c
+
+    @pytest.fixture(autouse=True)
+    def no_sleep(self):
+        """Skip actual backoff delays during tests."""
+        with patch(
+            "custom_components.minvandforsyning.api_client.asyncio.sleep",
+            AsyncMock(return_value=None),
+        ) as m:
+            yield m
+
+    def _make_resp(self, *, status=200, body=b""):
+        resp = AsyncMock()
+        resp.status = status
+        resp.headers = {}
+        resp.raise_for_status = MagicMock()
+        if status >= 400:
+            from aiohttp import ClientResponseError
+            resp.raise_for_status.side_effect = ClientResponseError(
+                request_info=MagicMock(), history=(), status=status, message="error",
+            )
+        resp.read = AsyncMock(return_value=body)
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+        return resp
+
+    @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+    @pytest.mark.asyncio
+    async def test_transient_status_retried_then_succeeds(
+        self, client, mock_session, status
+    ):
+        """A single transient HTTP error is retried and the second call returns data."""
+        fail_resp = self._make_resp(status=status)
+        ok_resp = self._make_resp(status=200, body=b"\x0b\xAA")
+
+        call_count = 0
+
+        def get_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return fail_resp if call_count == 1 else ok_resp
+
+        mock_session.get = MagicMock(side_effect=get_side_effect)
+
+        result = await client.async_get_meter_data(
+            "12345678", 15,
+            datetime(2026, 1, 1), datetime(2026, 4, 11),
+        )
+        assert result == b"\x0b\xAA"
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_transient_status_exhausts_attempts(self, client, mock_session):
+        """Repeated 5xx responses eventually propagate the HTTP error."""
+        from aiohttp import ClientResponseError
+        from custom_components.minvandforsyning.const import API_MAX_ATTEMPTS
+
+        fail_resp = self._make_resp(status=503)
+        mock_session.get = MagicMock(return_value=fail_resp)
+
+        with pytest.raises(ClientResponseError) as exc_info:
+            await client.async_get_meter_data(
+                "12345678", 15,
+                datetime(2026, 1, 1), datetime(2026, 4, 11),
+            )
+        assert exc_info.value.status == 503
+        assert mock_session.get.call_count == API_MAX_ATTEMPTS
+
+    @pytest.mark.asyncio
+    async def test_client_error_retried_then_succeeds(self, client, mock_session):
+        """aiohttp.ClientError is retried."""
+        from aiohttp import ClientConnectionError
+
+        ok_resp = self._make_resp(status=200, body=b"\x0b\xBB")
+
+        call_count = 0
+
+        def get_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ClientConnectionError("connection reset")
+            return ok_resp
+
+        mock_session.get = MagicMock(side_effect=get_side_effect)
+
+        result = await client.async_get_meter_data(
+            "12345678", 15,
+            datetime(2026, 1, 1), datetime(2026, 4, 11),
+        )
+        assert result == b"\x0b\xBB"
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_timeout_retried(self, client, mock_session):
+        """asyncio.TimeoutError is treated as transient."""
+        import asyncio as _aio
+        from custom_components.minvandforsyning.const import API_MAX_ATTEMPTS
+
+        mock_session.get = MagicMock(side_effect=_aio.TimeoutError())
+
+        with pytest.raises(_aio.TimeoutError):
+            await client.async_get_meter_data(
+                "12345678", 15,
+                datetime(2026, 1, 1), datetime(2026, 4, 11),
+            )
+        assert mock_session.get.call_count == API_MAX_ATTEMPTS
+
+    @pytest.mark.asyncio
+    async def test_backoff_is_exponential(self, client, mock_session, no_sleep):
+        """Delays follow base * 2**attempt."""
+        from aiohttp import ClientConnectionError
+        from custom_components.minvandforsyning.const import (
+            API_BACKOFF_BASE_SECONDS,
+        )
+
+        mock_session.get = MagicMock(side_effect=ClientConnectionError("x"))
+
+        with pytest.raises(ClientConnectionError):
+            await client.async_get_meter_data(
+                "12345678", 15,
+                datetime(2026, 1, 1), datetime(2026, 4, 11),
+            )
+
+        sleep_calls = [c.args[0] for c in no_sleep.call_args_list]
+        assert sleep_calls == [
+            API_BACKOFF_BASE_SECONDS * 1,
+            API_BACKOFF_BASE_SECONDS * 2,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_429_honors_retry_after_header(self, client, mock_session, no_sleep):
+        """When the server sets Retry-After, we wait at least that long."""
+        fail_resp = self._make_resp(status=429)
+        fail_resp.headers = {"Retry-After": "7"}
+        ok_resp = self._make_resp(status=200, body=b"\x0b")
+
+        call_count = 0
+
+        def get_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return fail_resp if call_count == 1 else ok_resp
+
+        mock_session.get = MagicMock(side_effect=get_side_effect)
+
+        result = await client.async_get_meter_data(
+            "12345678", 15,
+            datetime(2026, 1, 1), datetime(2026, 4, 11),
+        )
+        assert result == b"\x0b"
+        # First sleep should be at least 7s (Retry-After), not the default 1s.
+        first_delay = no_sleep.call_args_list[0].args[0]
+        assert first_delay >= 7.0
+
+    @pytest.mark.asyncio
+    async def test_429_retry_after_non_numeric_falls_back_to_backoff(
+        self, client, mock_session, no_sleep
+    ):
+        """Malformed Retry-After (e.g. HTTP-date) is ignored; default backoff applies."""
+        from custom_components.minvandforsyning.const import API_BACKOFF_BASE_SECONDS
+
+        fail_resp = self._make_resp(status=429)
+        fail_resp.headers = {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}
+        ok_resp = self._make_resp(status=200, body=b"\x0b")
+
+        call_count = 0
+
+        def get_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return fail_resp if call_count == 1 else ok_resp
+
+        mock_session.get = MagicMock(side_effect=get_side_effect)
+
+        await client.async_get_meter_data(
+            "12345678", 15,
+            datetime(2026, 1, 1), datetime(2026, 4, 11),
+        )
+        first_delay = no_sleep.call_args_list[0].args[0]
+        assert first_delay == API_BACKOFF_BASE_SECONDS * 1
 
     def test_token_expiry_buffer_is_five_minutes(self, client):
         """Verify the expiry buffer subtracts 5 minutes, not 2."""

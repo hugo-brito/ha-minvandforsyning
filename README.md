@@ -68,6 +68,24 @@ The **Total consumption** sensor uses `total_increasing`, so Home Assistant auto
 
 The integration talks to the same public API that the minvandforsyning.dk website uses. It fetches anonymous access tokens (no login required) and retrieves meter data in a binary protobuf format, which is decoded locally with a pure Python parser - zero external dependencies.
 
+## Troubleshooting
+
+### Water meter doesn't show up in the Energy dashboard, or the chart is empty
+
+If you added **Total consumption** as a Water source and the chart stays empty even though the entity shows a valid number, the entity's long-term statistics are likely in a bad state (`units_changed` or similar). This can happen if an earlier install registered the entity during a transient API failure or a device-class change.
+
+To recover:
+
+1. Go to **Settings** > **Developer tools** > **Statistics**.
+2. Look for issues listed against:
+   - `sensor.water_meter_<meter_number>_total_consumption`
+   - `sensor.water_meter_<meter_number>_hourly_consumption`
+   - `sensor.water_meter_<meter_number>_daily_consumption`
+3. Click **Fix issue** on each and choose **Delete** (or "Delete all long term statistics").
+4. Wait for the next poll (up to 1 hour by default). Fresh statistics will be written with the correct unit, and the Energy dashboard chart will start populating.
+
+You don't need to remove or re-add the Water source in the Energy dashboard - it picks up the new statistics automatically.
+
 ## License
 
 [MIT](LICENSE)

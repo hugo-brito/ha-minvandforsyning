@@ -109,6 +109,22 @@ class MinvandforsyningSensor(
         return self.entity_description.value_fn(self.coordinator.data)
 
     @property
+    def available(self) -> bool:
+        """Report unavailable when we have no value to publish.
+
+        Reporting ``native_value = None`` on an entity with a declared unit and
+        state_class causes HA's recorder to write an ``unknown`` row into
+        long-term statistics with the declared unit attached.  When a real
+        numeric value then arrives, the transition can be flagged as
+        ``units_changed`` on the statistics timeline, which breaks the Energy
+        dashboard.  Marking the entity unavailable is the documented contract
+        for "no meaningful value right now" and keeps LTS clean.
+        """
+        if not super().available:
+            return False
+        return self.native_value is not None
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         if self.coordinator.data is None or self.entity_description.extra_attrs_fn is None:
             return None

@@ -24,6 +24,12 @@ SUPPLIER_ID_SCAN_MIN = 1
 SUPPLIER_ID_SCAN_MAX = 500
 SUPPLIER_DISCOVERY_THRESHOLD_BYTES = 910  # empty schema ~903 bytes
 
+# Retry policy for transient API failures (5xx, 429, network errors, timeouts).
+# Bounded so we never monopolize the coordinator's update window.
+API_MAX_ATTEMPTS = 3
+API_BACKOFF_BASE_SECONDS = 1.0
+API_TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+
 # Table index for hourly meter readings in the protobuf DataSet
 READINGS_TABLE_INDEX = 6
 

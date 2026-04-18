@@ -6,9 +6,12 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from aiohttp import ClientSession
+from aiohttp import ClientError, ClientResponseError, ClientSession
 
 from .const import (
+    API_BACKOFF_BASE_SECONDS,
+    API_MAX_ATTEMPTS,
+    API_TRANSIENT_STATUS_CODES,
     BROKER_API_URL,
     CLIENT_APPLICATION_APP,
     CONTEXT_TOKEN_HEADER,
@@ -86,7 +89,12 @@ class MinvandforsyningClient:
         date_from: datetime,
         date_to: datetime,
     ) -> bytes:
-        """Fetch raw meter data (protobuf-net-data binary)."""
+        """Fetch raw meter data (protobuf-net-data binary).
+
+        Retries on transient failures (5xx, 429, network errors, timeouts) with
+        bounded exponential backoff. A single 401 response triggers a token
+        refresh and counts as one attempt.
+        """
         tokens = await self.async_get_tokens()
 
         url = f"{BROKER_API_URL}{METER_DATA_PATH}"
@@ -96,25 +104,61 @@ class MinvandforsyningClient:
             "DateFrom": date_from.strftime("%Y-%m-%d"),
             "DateTo": date_to.strftime("%Y-%m-%d"),
         }
-        headers = {
-            "Authorization": f"Bearer {tokens.easy_auth_token}",
-            CONTEXT_TOKEN_HEADER: tokens.context_token,
-        }
-        async with self._session.get(url, params=params, headers=headers) as resp:
-            if resp.status == 401:
-                # Token expired mid-session; force refresh and retry once
-                _LOGGER.warning("Received HTTP 401 from API; invalidating cached tokens and retrying")
-                self._tokens = None
-                tokens = await self.async_get_tokens()
-                headers = {
-                    "Authorization": f"Bearer {tokens.easy_auth_token}",
-                    CONTEXT_TOKEN_HEADER: tokens.context_token,
-                }
-                async with self._session.get(url, params=params, headers=headers) as retry_resp:
-                    retry_resp.raise_for_status()
-                    return await retry_resp.read()
-            resp.raise_for_status()
-            return await resp.read()
+        auth_retried = False
+
+        for attempt in range(API_MAX_ATTEMPTS):
+            headers = {
+                "Authorization": f"Bearer {tokens.easy_auth_token}",
+                CONTEXT_TOKEN_HEADER: tokens.context_token,
+            }
+            try:
+                async with self._session.get(url, params=params, headers=headers) as resp:
+                    if resp.status == 401 and not auth_retried:
+                        _LOGGER.warning(
+                            "Received HTTP 401 from API; invalidating cached tokens and retrying"
+                        )
+                        self._tokens = None
+                        tokens = await self.async_get_tokens()
+                        auth_retried = True
+                        continue
+                    if (
+                        resp.status in API_TRANSIENT_STATUS_CODES
+                        and attempt < API_MAX_ATTEMPTS - 1
+                    ):
+                        delay = API_BACKOFF_BASE_SECONDS * (2 ** attempt)
+                        if resp.status == 429:
+                            # Honor Retry-After when the server sets it.
+                            retry_after = resp.headers.get("Retry-After", "")
+                            if retry_after.isdigit():
+                                delay = max(delay, float(retry_after))
+                        _LOGGER.warning(
+                            "HTTP %d from API, retrying in %.1fs (attempt %d/%d)",
+                            resp.status, delay, attempt + 1, API_MAX_ATTEMPTS,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    # Success path, or final attempt on a transient status:
+                    # raise_for_status turns 4xx/5xx into ClientResponseError,
+                    # which the except below propagates.
+                    resp.raise_for_status()
+                    return await resp.read()
+            except ClientResponseError:
+                # HTTP status error: fail fast. Transient statuses that reach
+                # here did so only because retries were exhausted.
+                raise
+            except (ClientError, asyncio.TimeoutError) as err:
+                if attempt >= API_MAX_ATTEMPTS - 1:
+                    raise
+                delay = API_BACKOFF_BASE_SECONDS * (2 ** attempt)
+                _LOGGER.warning(
+                    "Transient error %r, retrying in %.1fs (attempt %d/%d)",
+                    err, delay, attempt + 1, API_MAX_ATTEMPTS,
+                )
+                await asyncio.sleep(delay)
+
+        # Unreachable: the loop above either returns a payload or raises.
+        # Kept as a defensive guard in case the control flow is changed later.
+        raise RuntimeError("async_get_meter_data: retries exhausted without response")
 
     async def async_discover_supplier_id(self, meter_number: str) -> int | None:
         """Scan supplier IDs to find which one has data for the given meter.
