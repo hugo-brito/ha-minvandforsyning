@@ -42,3 +42,12 @@ Thumbs.db
 .env.*
 !.env.example
 !.env.template
+
+# --- Workspace sync (managed by _workspace) ---
+.github/agents/
+.github/prompts/
+.github/instructions/
+.vscode/mcp.json
+.copilotignore
+.agent/
+# --- End workspace sync ---
