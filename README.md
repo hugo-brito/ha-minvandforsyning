@@ -70,6 +70,27 @@ The integration talks to the same public API that the minvandforsyning.dk websit
 
 ## Troubleshooting
 
+### Hourly/daily sensors show 0 or stay flat for hours
+
+The integration polls the Ramboll API every hour by default, but the API only returns whatever the upstream supplier has published. **Some suppliers only push meter readings once every 24 hours** (often late at night). Until they do, the integration has nothing newer to show:
+
+- **Total consumption** still looks current, because it's a cumulative odometer value from the last published row.
+- **Hourly consumption** shows the consumption in the *most recently published* hour, which can be a low-flow hour (e.g. 1 L while you were asleep).
+- **Daily consumption** shows 0 L until the supplier publishes at least one row dated today.
+
+Every sensor exposes a `last_reading_date` attribute - check it in **Developer tools** > **States**. If it's many hours behind wall-clock time, your supplier simply hasn't published newer data yet, and there's nothing the integration can do about it.
+
+To confirm what the API returned on the last poll, enable debug logging:
+
+```yaml
+logger:
+  default: warning
+  logs:
+    custom_components.minvandforsyning: debug
+```
+
+After the next poll, **Settings** > **System** > **Logs** will contain a line like `Fetched N readings for meter <id> (latest: ...)` showing the timestamp of the newest reading available.
+
 ### Water meter doesn't show up in the Energy dashboard, or the chart is empty
 
 If you added **Total consumption** as a Water source and the chart stays empty even though the entity shows a valid number, the entity's long-term statistics are likely in a bad state (`units_changed` or similar). This can happen if an earlier install registered the entity during a transient API failure or a device-class change.

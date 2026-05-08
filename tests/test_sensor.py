@@ -161,3 +161,68 @@ class TestSensorAvailability:
             ]),
         )
         assert sensor.available is True
+
+
+class TestExtraStateAttributes:
+    """Every sensor must expose ``last_reading_date`` so users can see how
+    fresh the supplier's published data is without enabling debug logs.
+
+    Some suppliers publish meter data only once per 24h (see issue #2);
+    surfacing the timestamp lets users self-diagnose "stale data" reports.
+    """
+
+    def _make_sensor(self, key: str, data: MinvandforsyningData | None):
+        coordinator = MagicMock()
+        coordinator.data = data
+        coordinator.last_update_success = True
+        entry = MagicMock()
+        entry.data = {"meter_number": "12345"}
+        return MinvandforsyningSensor(coordinator, _desc(key), entry)
+
+    def _reading(self, total: str, consumption: str, date: datetime | None = None) -> MeterReading:
+        return MeterReading(
+            date=date or datetime(2026, 5, 8, 12, 0, 0),
+            reading=Decimal(total),
+            consumption=Decimal(consumption),
+        )
+
+    def test_attrs_are_none_when_no_coordinator_data(self):
+        for key in ("total", "hourly", "daily"):
+            sensor = self._make_sensor(key, None)
+            assert sensor.extra_state_attributes is None, key
+
+    def test_total_exposes_last_reading_date_and_count(self):
+        sensor = self._make_sensor(
+            "total",
+            MinvandforsyningData([self._reading("300.000", "10")]),
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs == {
+            "last_reading_date": "2026-05-08T12:00:00",
+            "readings_count": 1,
+        }
+
+    def test_hourly_exposes_last_reading_date(self):
+        sensor = self._make_sensor(
+            "hourly",
+            MinvandforsyningData([self._reading("300.000", "10")]),
+        )
+        assert sensor.extra_state_attributes == {
+            "last_reading_date": "2026-05-08T12:00:00",
+        }
+
+    def test_daily_exposes_last_reading_date(self):
+        sensor = self._make_sensor(
+            "daily",
+            MinvandforsyningData([self._reading("300.000", "10")]),
+        )
+        assert sensor.extra_state_attributes == {
+            "last_reading_date": "2026-05-08T12:00:00",
+        }
+
+    def test_last_reading_date_is_none_when_readings_empty(self):
+        for key in ("total", "hourly", "daily"):
+            sensor = self._make_sensor(key, MinvandforsyningData([]))
+            attrs = sensor.extra_state_attributes
+            assert attrs is not None, key
+            assert attrs["last_reading_date"] is None, key

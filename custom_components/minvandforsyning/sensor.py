@@ -31,6 +31,19 @@ class MinvandforsyningSensorDescription(SensorEntityDescription):
     extra_attrs_fn: Callable[[MinvandforsyningData], dict[str, Any]] | None = None
 
 
+def _last_reading_date_attr(data: MinvandforsyningData) -> dict[str, Any]:
+    """Expose the timestamp of the most recent reading available from the API.
+
+    Some suppliers only publish meter data once every 24 hours. Surfacing this
+    timestamp on every sensor lets users see *when* the data they're looking at
+    was actually produced, without enabling debug logs.
+    """
+    latest = data.latest_reading
+    return {
+        "last_reading_date": latest.date.isoformat() if latest else None,
+    }
+
+
 SENSOR_DESCRIPTIONS: tuple[MinvandforsyningSensorDescription, ...] = (
     MinvandforsyningSensorDescription(
         key="total",
@@ -41,7 +54,7 @@ SENSOR_DESCRIPTIONS: tuple[MinvandforsyningSensorDescription, ...] = (
         suggested_display_precision=3,
         value_fn=lambda data: data.total_m3,
         extra_attrs_fn=lambda data: {
-            "last_reading_date": data.latest_reading.date.isoformat() if data.latest_reading else None,
+            **_last_reading_date_attr(data),
             "readings_count": len(data.readings),
         },
     ),
@@ -52,6 +65,7 @@ SENSOR_DESCRIPTIONS: tuple[MinvandforsyningSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfVolume.LITERS,
         suggested_display_precision=0,
         value_fn=lambda data: data.last_hour_liters,
+        extra_attrs_fn=_last_reading_date_attr,
     ),
     MinvandforsyningSensorDescription(
         key="daily",
@@ -60,6 +74,7 @@ SENSOR_DESCRIPTIONS: tuple[MinvandforsyningSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfVolume.LITERS,
         suggested_display_precision=0,
         value_fn=lambda data: data.daily_liters(),
+        extra_attrs_fn=_last_reading_date_attr,
     ),
 )
 
