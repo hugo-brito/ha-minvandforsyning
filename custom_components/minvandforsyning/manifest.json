@@ -5,11 +5,13 @@
     "@hugo-brito"
   ],
   "config_flow": true,
-  "dependencies": ["recorder"],
+  "dependencies": [
+    "recorder"
+  ],
   "documentation": "https://github.com/hugo-brito/ha-minvandforsyning",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/hugo-brito/ha-minvandforsyning/issues",
   "requirements": [],
-  "version": "1.0.0"
+  "version": "1.0.26156.1"
 }
