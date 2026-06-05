@@ -178,3 +178,44 @@ class TestConstants:
 
     def test_conf_key(self):
         assert CONF_SCAN_INTERVAL == "scan_interval"
+
+
+# ---------------------------------------------------------------------------
+# Options flow: import_statistics field round-trip
+# ---------------------------------------------------------------------------
+
+class TestImportStatisticsOption:
+    """The options flow must persist import_statistics alongside scan_interval."""
+
+    def _get_options_schema(self):
+        """Build a schema matching the one used by the options flow."""
+        from custom_components.minvandforsyning.const import (
+            CONF_IMPORT_STATISTICS,
+            DEFAULT_IMPORT_STATISTICS,
+        )
+        return vol.Schema({
+            vol.Required(CONF_SCAN_INTERVAL, default=60): vol.All(
+                vol.Coerce(int),
+                vol.Range(min=MIN_SCAN_INTERVAL // 60, max=MAX_SCAN_INTERVAL // 60),
+            ),
+            vol.Required(CONF_IMPORT_STATISTICS, default=DEFAULT_IMPORT_STATISTICS): bool,
+        })
+
+    def test_import_statistics_accepts_true(self):
+        from custom_components.minvandforsyning.const import CONF_IMPORT_STATISTICS
+        schema = self._get_options_schema()
+        result = schema({CONF_SCAN_INTERVAL: 60, CONF_IMPORT_STATISTICS: True})
+        assert result[CONF_IMPORT_STATISTICS] is True
+
+    def test_import_statistics_accepts_false(self):
+        from custom_components.minvandforsyning.const import CONF_IMPORT_STATISTICS
+        schema = self._get_options_schema()
+        result = schema({CONF_SCAN_INTERVAL: 60, CONF_IMPORT_STATISTICS: False})
+        assert result[CONF_IMPORT_STATISTICS] is False
+
+    def test_default_is_true(self):
+        from custom_components.minvandforsyning.const import (
+            CONF_IMPORT_STATISTICS,
+            DEFAULT_IMPORT_STATISTICS,
+        )
+        assert DEFAULT_IMPORT_STATISTICS is True

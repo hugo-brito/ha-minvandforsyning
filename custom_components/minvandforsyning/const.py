@@ -38,3 +38,21 @@ COL_READING_DATE = "ReadingDate"
 COL_READING = "Reading"
 COL_CONSUMPTION = "Consumption"
 COL_INFO_CODE = "InfoCode"
+
+# Long-term statistics import
+CONF_IMPORT_STATISTICS = "import_statistics"
+DEFAULT_IMPORT_STATISTICS = True
+SUPPLIER_TIMEZONE = "Europe/Copenhagen"  # Rambøll API publishes Danish local time
+LITERS_PER_CUBIC_METER = 1000
+SERVICE_BACKFILL_STATISTICS = "backfill_statistics"
+# External statistic_id template — uses the ``<domain>:<object_id>`` form
+# required by async_add_external_statistics. Keeps the LTS stream isolated
+# from the sensor entity's auto-LTS, so there's no current-hour collision.
+STATISTIC_ID_FORMAT = DOMAIN + ":water_meter_{meter_number}_total"
+# Live API probing (see .agent/probe-api-range-output.md) shows the Rambøll
+# endpoint serves up to ~5 years of hourly history in a single ~1.3 s call.
+# Beyond ~5 years the response stops growing — that's the effective ceiling.
+INITIAL_HYDRATE_DAYS = 1825  # ~5 years; API ceiling observed via probe
+# Backfill service caps `days` at the same ceiling so users can repopulate
+# the full available supplier history after deleting the LTS stream.
+SERVICE_BACKFILL_MAX_DAYS = 1825  # see INITIAL_HYDRATE_DAYS

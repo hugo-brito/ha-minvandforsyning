@@ -92,6 +92,7 @@ class TestCoordinatorDateRange:
 
         coordinator = MinvandforsyningCoordinator(
             hass, client, "99999999", 15,
+            import_statistics=False,
         )
 
         frozen_now = datetime(2026, 4, 15, 12, 0, 0, tzinfo=timezone.utc)

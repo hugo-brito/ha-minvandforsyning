@@ -27,7 +27,28 @@
       "init": {
         "title": "MinVandforsyning indstillinger",
         "data": {
-          "scan_interval": "Opdateringsinterval (minutter)"
+          "scan_interval": "Opdateringsinterval (minutter)",
+          "import_statistics": "Importer historiske aflæsninger som langtidsstatistik"
+        }
+      }
+    }
+  },
+  "services": {
+    "backfill_statistics": {
+      "name": "Genimportér langtidsstatistik",
+      "description": "Genimporterer måleraflæsninger i langtidsstatistik med leverandørens rapporterede tidsstempler. Hvis 'Dage' er angivet, henter integrationen så mange dages friske data fra leverandøren (op til ca. 5 år). Hvis 'Dage' udelades, genimporteres kun de seneste cachede aflæsninger (op til 48 timer). Brug efter sletning af forkerte statistikker eller til at indlæse en lang historik efter geninstallation af integrationen.",
+      "fields": {
+        "meter_number": {
+          "name": "Målernummer",
+          "description": "Valgfri. Hvis angivet, genimporteres kun den matchende konfigurerede måler. Udelad for at genimportere alle konfigurerede målere."
+        },
+        "days": {
+          "name": "Dage",
+          "description": "Antal dage af historik der hentes fra leverandøren (1-1825). Udelad for kun at genimportere de seneste cachede aflæsninger (op til 48 timer)."
+        },
+        "force_full": {
+          "name": "Tving fuld import",
+          "description": "Nulstil den løbende sum og genimportér hver hentet aflæsning. Brug kun hvis statistikken viser en defekt total. Standard: fra."
         }
       }
     }

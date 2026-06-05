@@ -1,0 +1,36 @@
+backfill_statistics:
+  name: Backfill long-term statistics
+  description: >
+    Re-imports meter readings into long-term statistics at the supplier's
+    reported timestamps. When 'days' is set, the integration fetches that
+    many days of fresh data from the supplier (up to ~5 years). When 'days'
+    is omitted, it replays the most recently cached readings (up to 48 h).
+    Use after deleting bad statistics, or to bootstrap a long history after
+    the integration was reinstalled.
+  fields:
+    meter_number:
+      name: Meter number
+      description: Optional. Only backfill the matching configured meter.
+      example: "12345678"
+      selector:
+        text:
+    days:
+      name: Days
+      description: >
+        Number of days of history to fetch from the supplier (1-1825).
+        Omit to replay only the most recent cached readings.
+      example: 365
+      selector:
+        number:
+          min: 1
+          max: 1825
+          mode: box
+    force_full:
+      name: Force full
+      description: >
+        Reset the running cumulative sum and re-import every fetched reading.
+        Useful only when the recorder shows a broken cumulative total.
+        Default: off.
+      default: false
+      selector:
+        boolean:

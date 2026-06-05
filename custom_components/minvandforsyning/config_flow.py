@@ -14,7 +14,9 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api_client import MinvandforsyningClient
 from .const import (
     COL_READING,
+    CONF_IMPORT_STATISTICS,
     CONF_SCAN_INTERVAL,
+    DEFAULT_IMPORT_STATISTICS,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MAX_SCAN_INTERVAL,
@@ -151,6 +153,9 @@ class MinvandforsyningOptionsFlow(OptionsFlow):
         current = self.config_entry.options.get(
             CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
         )
+        current_import = self.config_entry.options.get(
+            CONF_IMPORT_STATISTICS, DEFAULT_IMPORT_STATISTICS
+        )
 
         return self.async_show_form(
             step_id="init",
@@ -166,6 +171,10 @@ class MinvandforsyningOptionsFlow(OptionsFlow):
                             max=MAX_SCAN_INTERVAL // 60,
                         ),
                     ),
+                    vol.Required(
+                        CONF_IMPORT_STATISTICS,
+                        default=current_import,
+                    ): bool,
                 }
             ),
         )

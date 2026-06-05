@@ -11,6 +11,7 @@ Reads your water meter data directly from the Ramboll API - no scraping, no brow
 - Hourly consumption (liters)
 - Daily consumption (liters)
 - Configurable polling interval (default: every hour)
+- Long-term statistics import: each hourly meter reading is recorded in HA's long-term statistics at the supplier's reported timestamp
 
 ## Requirements
 
@@ -54,6 +55,8 @@ After setup, you can adjust the polling interval:
 
 Changes apply immediately without restarting Home Assistant.
 
+The options screen also exposes **Import historical readings as long-term statistics** (default: on). See [Long-term statistics](#long-term-statistics).
+
 ## Sensors
 
 | Sensor             | Unit | State class       | Description                          |
@@ -63,6 +66,49 @@ Changes apply immediately without restarting Home Assistant.
 | Daily consumption  | L    | measurement       | Consumption so far today             |
 
 The **Total consumption** sensor uses `total_increasing`, so Home Assistant automatically tracks daily, weekly, and monthly statistics. You can add it as a Water source in the Energy dashboard.
+
+## Long-term statistics
+
+When **Import historical readings as long-term statistics** is enabled (the default), the integration writes an external long-term-statistics stream:
+
+```
+minvandforsyning:water_meter_<meter_number>_total
+```
+
+Each hourly reading is recorded at the supplier's reported timestamp, not at the time Home Assistant polled. The Energy dashboard's hourly buckets line up with what the supplier reports.
+
+On first install, the integration fetches up to 5 years of supplier history in a single API call and imports every reading. This is idempotent: if the stream already has data, the import is skipped. To force a re-import after manually deleting the stream, restart the integration or call `minvandforsyning.backfill_statistics` with `days: 1825`.
+
+### Using the new stream in the Energy dashboard
+
+After the first poll, the statistic appears in **Settings** > **Dashboards** > **Energy** > **Water consumption** > **Edit**. Pick **Water Meter \<meter_number\> Total Consumption** (under the *MinVandforsyning* group) and save.
+
+The `sensor.water_meter_<meter_number>_total_consumption` entity continues to work and Home Assistant still generates its own long-term statistics from it at poll time. Do not add both to the Energy dashboard at the same time; the values will double-count.
+
+### Backfill service
+
+`minvandforsyning.backfill_statistics` has two modes:
+
+- With `days` set (1 to 1825): fetches that many days of history from the supplier and imports it.
+- With `days` omitted: re-imports the most recently cached batch (up to 48 h from the last poll).
+
+```yaml
+service: minvandforsyning.backfill_statistics
+data:
+  days: 365                  # optional; 1-1825
+  meter_number: "12345678"   # optional; default = all configured meters
+  force_full: false          # optional; reset the cumulative sum and re-import
+```
+
+`force_full` (default `false`) resets the running cumulative sum and rewrites every imported reading's `sum`. Only set it if the recorder's cumulative is visibly broken.
+
+### Removing a meter
+
+Deleting the integration's config entry removes the sensor entities but leaves the external statistic stream in the recorder. To clean it up:
+
+1. **Developer tools** > **Statistics**
+2. Search for `minvandforsyning:water_meter_<meter_number>_total`
+3. Click the trash icon and confirm
 
 ## How it works
 
@@ -102,10 +148,15 @@ To recover:
    - `sensor.water_meter_<meter_number>_total_consumption`
    - `sensor.water_meter_<meter_number>_hourly_consumption`
    - `sensor.water_meter_<meter_number>_daily_consumption`
+   - `minvandforsyning:water_meter_<meter_number>_total`
 3. Click **Fix issue** on each and choose **Delete** (or "Delete all long term statistics").
 4. Wait for the next poll (up to 1 hour by default). Fresh statistics will be written with the correct unit, and the Energy dashboard chart will start populating.
 
 You don't need to remove or re-add the Water source in the Energy dashboard - it picks up the new statistics automatically.
+
+### Reporting issues
+
+Debug and warning log lines include your meter number. If you're sharing logs in a GitHub issue, replace all occurrences of your meter number with `<METER>` first.
 
 ## License
 
