@@ -97,10 +97,10 @@ service: minvandforsyning.backfill_statistics
 data:
   days: 365                  # optional; 1-1825
   meter_number: "12345678"   # optional; default = all configured meters
-  force_full: false          # optional; reset the cumulative sum and re-import
+  force_full: false          # optional; rewrite every fetched bucket
 ```
 
-`force_full` (default `false`) resets the running cumulative sum and rewrites every imported reading's `sum`. Only set it if the recorder's cumulative is visibly broken.
+`force_full` (default `false`) re-imports every fetched reading, including buckets already in long-term statistics. Only set it if the recorder's cumulative is visibly broken. The cumulative sum continues from the bucket stored immediately before the imported window, or starts at zero if no prior history exists. Only the fetched window is rewritten; to repair corruption beyond it, set `days` large enough to cover the affected range, or delete the statistic via **Developer tools** > **Statistics** and let the install-time hydrate rebuild it from supplier history.
 
 ### Removing a meter
 

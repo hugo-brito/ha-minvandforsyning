@@ -1,4 +1,4 @@
-"""Tests for long-term statistics import (issue #3)."""
+"""Tests for long-term statistics import."""
 from __future__ import annotations
 
 import asyncio
@@ -98,15 +98,58 @@ class _RecorderPatches:
         self._patches: list[Any] = []
         self.import_stats: MagicMock | None = None
         self.last_stats: MagicMock | None = None
+        self.during_period: MagicMock | None = None
         self.get_instance: MagicMock | None = None
 
     def __enter__(self) -> "_RecorderPatches":
+        # Mirror the recorder's LIMIT N over ORDER BY start_ts DESC so the
+        # truncation that drives count-bounded anchor lookups stays
+        # visible in tests.
+        def _last_stats_truncating(
+            _hass: Any,
+            number_of_stats: int,
+            statistic_id: str,
+            _convert: Any,
+            _types: Any,
+        ) -> dict[str, list[dict[str, Any]]]:
+            rows = sorted(
+                self._last_stats.get(statistic_id, []),
+                key=lambda r: r["start"],
+                reverse=True,
+            )[:number_of_stats]
+            return {statistic_id: rows} if rows else {}
+
+        # Time-bounded query: rows with start_time <= start < end_time.
+        def _during_period(
+            _hass: Any,
+            start_time: datetime,
+            end_time: datetime | None,
+            statistic_ids: set[str],
+            _period: Any,
+            _units: Any,
+            _types: Any,
+        ) -> dict[str, list[dict[str, Any]]]:
+            sid = next(iter(statistic_ids))
+            rows = self._last_stats.get(sid, [])
+            lo = start_time.timestamp()
+            hi = end_time.timestamp() if end_time is not None else float("inf")
+            matched = sorted(
+                (r for r in rows if lo <= r["start"] < hi),
+                key=lambda r: r["start"],
+            )
+            return {sid: matched} if matched else {}
+
         p_imp = patch(
             "custom_components.minvandforsyning.coordinator.async_add_external_statistics"
         )
         p_last = patch(
             "custom_components.minvandforsyning.coordinator.get_last_statistics",
-            return_value=self._last_stats,
+            side_effect=_last_stats_truncating,
+        )
+        p_period = patch(
+            "custom_components.minvandforsyning.coordinator.statistics_during_period",
+            side_effect=_during_period,
+            create=True,
         )
         p_inst = patch(
             "custom_components.minvandforsyning.coordinator.get_instance"
@@ -116,8 +159,9 @@ class _RecorderPatches:
         if self._import_side_effect is not None:
             self.import_stats.side_effect = self._import_side_effect
         self.last_stats = p_last.start()
+        self.during_period = p_period.start()
         self.get_instance = p_inst.start()
-        self._patches = [p_imp, p_last, p_inst]
+        self._patches = [p_imp, p_last, p_period, p_inst]
 
         # async_add_executor_job(func, *args) -> await func(*args)
         recorder = MagicMock()
@@ -262,7 +306,7 @@ class TestForceFullAndRunningSum:
         # by starting from the latest sum before the rewritten window.
         assert stats[0]["sum"] == pytest.approx(10.1)
         assert stats[-1]["sum"] == pytest.approx(11.5)
-        assert p.last_stats.call_count == 1
+        assert (p.last_stats.call_count + p.during_period.call_count) == 1
 
     @pytest.mark.asyncio
     async def test_force_full_starts_from_zero_when_no_prior_stat_exists(self):
@@ -284,7 +328,93 @@ class TestForceFullAndRunningSum:
         stats = p.import_stats.call_args[0][2]
         assert stats[0]["sum"] == pytest.approx(0.1)
         assert stats[-1]["sum"] == pytest.approx(1.5)
-        assert p.last_stats.call_count == 1
+        assert (p.last_stats.call_count + p.during_period.call_count) == 1
+
+    @pytest.mark.asyncio
+    async def test_force_full_preserves_continuity_when_K_exceeds_R(self):
+        """LTS holds more rows inside the rewrite window than the importer
+        has readings; the anchor before the window must still seed the sum."""
+        coord = _make_coordinator()
+        readings = _sample_readings()
+        data = MinvandforsyningData(readings)
+        first_ts = readings[0].date.replace(tzinfo=_DK).timestamp()
+        anchor_ts = first_ts - 3600
+        in_window = [
+            {"start": first_ts + i * 3600, "sum": 100.0 + i * 0.01}
+            for i in range(10)
+        ]
+        last_stats = {
+            _DEFAULT_STATISTIC_ID: (
+                [{"start": anchor_ts, "sum": 50.0}] + in_window
+            ),
+        }
+
+        with _RecorderPatches(last_stats=last_stats) as p:
+            await coord.async_import_readings(data, force_full=True)
+
+        stats = p.import_stats.call_args[0][2]
+        assert len(stats) == len(readings)
+        assert stats[0]["sum"] == pytest.approx(50.1)
+        assert stats[-1]["sum"] == pytest.approx(51.5)
+
+    @pytest.mark.asyncio
+    async def test_force_full_anchor_lookup_is_constant_size(self):
+        """Anchor lookup must not scale with ``len(data.readings)``."""
+        coord = _make_coordinator()
+        readings = _sample_readings()
+        data = MinvandforsyningData(readings)
+
+        with _RecorderPatches() as p:
+            await coord.async_import_readings(data, force_full=True)
+
+        if p.during_period.call_count:
+            assert p.last_stats.call_count == 0
+            assert p.during_period.call_count == 1
+        else:
+            assert p.last_stats.call_count == 1
+            number_of_stats = p.last_stats.call_args[0][1]
+            assert number_of_stats <= len(readings) + 1
+
+    @pytest.mark.asyncio
+    async def test_force_full_does_not_treat_window_boundary_row_as_anchor(self):
+        """A row at exactly ``first_start_ts`` is inside the window and
+        must be overwritten, not used to seed the sum."""
+        coord = _make_coordinator()
+        readings = _sample_readings()
+        data = MinvandforsyningData(readings)
+        first_ts = readings[0].date.replace(tzinfo=_DK).timestamp()
+        last_stats = {
+            _DEFAULT_STATISTIC_ID: [
+                {"start": first_ts, "sum": 99.0},
+            ],
+        }
+
+        with _RecorderPatches(last_stats=last_stats) as p:
+            await coord.async_import_readings(data, force_full=True)
+
+        stats = p.import_stats.call_args[0][2]
+        assert stats[0]["sum"] == pytest.approx(0.1)
+        assert stats[-1]["sum"] == pytest.approx(1.5)
+
+    @pytest.mark.asyncio
+    async def test_force_full_treats_anchor_with_null_sum_as_zero(self):
+        """A recorder row whose ``sum`` is ``None`` must seed at 0, not raise."""
+        coord = _make_coordinator()
+        readings = _sample_readings()
+        data = MinvandforsyningData(readings)
+        first_ts = readings[0].date.replace(tzinfo=_DK).timestamp()
+        last_stats = {
+            _DEFAULT_STATISTIC_ID: [
+                {"start": first_ts - 3600, "sum": None},
+            ],
+        }
+
+        with _RecorderPatches(last_stats=last_stats) as p:
+            await coord.async_import_readings(data, force_full=True)
+
+        stats = p.import_stats.call_args[0][2]
+        assert stats[0]["sum"] == pytest.approx(0.1)
+        assert stats[-1]["sum"] == pytest.approx(1.5)
 
     @pytest.mark.asyncio
     async def test_running_sum_continues_from_last_stat(self):
