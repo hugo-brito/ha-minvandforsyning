@@ -234,14 +234,22 @@ class TestIdempotency:
 
 class TestForceFullAndRunningSum:
     @pytest.mark.asyncio
-    async def test_force_full_ignores_cutoff(self):
-        """Even with a cutoff present, force_full=True imports everything from 0."""
+    async def test_force_full_ignores_cutoff_and_preserves_continuity(self):
+        """force_full=True rewrites all readings while continuing from the
+        latest stored sum strictly before the imported window."""
         coord = _make_coordinator()
         readings = _sample_readings()
         data = MinvandforsyningData(readings)
+        first_ts = readings[0].date.replace(tzinfo=_DK).timestamp()
         cutoff_ts = readings[-1].date.replace(tzinfo=_DK).timestamp()
         last_stats = {
-            _DEFAULT_STATISTIC_ID: [{"start": cutoff_ts, "sum": 99.0}],
+            _DEFAULT_STATISTIC_ID: [
+                {"start": cutoff_ts, "sum": 99.0},  # inside rewritten window
+                {
+                    "start": first_ts - timedelta(hours=1).total_seconds(),
+                    "sum": 10.0,
+                },  # anchor before window
+            ],
         }
 
         with _RecorderPatches(last_stats=last_stats) as p:
@@ -250,11 +258,33 @@ class TestForceFullAndRunningSum:
         assert p.import_stats.call_count == 1
         stats = p.import_stats.call_args[0][2]
         assert len(stats) == len(readings)
-        # Running sum starts from 0, not 99.0 (cutoff was ignored).
-        # First reading consumption=100L → sum = 0.1
+        # Cutoff is ignored (all readings imported), but continuity is preserved
+        # by starting from the latest sum before the rewritten window.
+        assert stats[0]["sum"] == pytest.approx(10.1)
+        assert stats[-1]["sum"] == pytest.approx(11.5)
+        assert p.last_stats.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_force_full_starts_from_zero_when_no_prior_stat_exists(self):
+        """If no stored bucket exists before the imported window, start at 0."""
+        coord = _make_coordinator()
+        readings = _sample_readings()
+        data = MinvandforsyningData(readings)
+        first_ts = readings[0].date.replace(tzinfo=_DK).timestamp()
+        last_stats = {
+            _DEFAULT_STATISTIC_ID: [
+                {"start": first_ts, "sum": 3.0},
+                {"start": first_ts + 3600, "sum": 3.2},
+            ],
+        }
+
+        with _RecorderPatches(last_stats=last_stats) as p:
+            await coord.async_import_readings(data, force_full=True)
+
+        stats = p.import_stats.call_args[0][2]
         assert stats[0]["sum"] == pytest.approx(0.1)
-        # get_last_statistics must not have been consulted.
-        assert p.last_stats.call_count == 0
+        assert stats[-1]["sum"] == pytest.approx(1.5)
+        assert p.last_stats.call_count == 1
 
     @pytest.mark.asyncio
     async def test_running_sum_continues_from_last_stat(self):

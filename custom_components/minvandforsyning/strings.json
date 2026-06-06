@@ -48,7 +48,7 @@
         },
         "force_full": {
           "name": "Force full",
-          "description": "Reset the running cumulative sum and re-import every fetched reading. Useful only when the recorder shows a broken cumulative total. Default: off."
+          "description": "Re-import every fetched reading, including already-imported buckets. The cumulative sum continues from the last stored point before the imported window. Default: off."
         }
       }
     }

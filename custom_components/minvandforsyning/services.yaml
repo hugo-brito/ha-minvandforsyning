@@ -28,8 +28,9 @@ backfill_statistics:
     force_full:
       name: Force full
       description: >
-        Reset the running cumulative sum and re-import every fetched reading.
-        Useful only when the recorder shows a broken cumulative total.
+        Re-import every fetched reading, including already-imported buckets.
+        Keeps continuity with the previously stored cumulative sum before the
+        imported window.
         Default: off.
       default: false
       selector:

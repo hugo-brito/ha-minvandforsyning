@@ -325,7 +325,36 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
 
         cutoff_ts: float | None = None
         sum_so_far = Decimal(0)
-        if not force_full:
+        if force_full:
+            first_start_utc = self.to_utc(data.readings[0].date).replace(
+                minute=0, second=0, microsecond=0,
+            )
+            first_start_ts = first_start_utc.timestamp()
+            # Preserve continuity when rewriting an overlapping recent window:
+            # use the latest stored sum strictly before the first imported
+            # bucket as the starting point.
+            last_stats = await get_instance(self.hass).async_add_executor_job(
+                get_last_statistics,
+                self.hass,
+                # Ask for at least two rows so we can discover a row strictly
+                # before the first imported bucket when one exists. We ask for
+                # ``len(readings) + 1`` so a full overlap of the rewritten
+                # window can still include one older anchor row.
+                max(2, len(data.readings) + 1),
+                statistic_id,
+                True,
+                {"sum"},
+            )
+            if last_stats and statistic_id in last_stats:
+                best_prior_ts: float | None = None
+                for row in last_stats[statistic_id]:
+                    row_start = row["start"]
+                    if row_start < first_start_ts and (
+                        best_prior_ts is None or row_start > best_prior_ts
+                    ):
+                        sum_so_far = Decimal(str(row.get("sum") or 0))
+                        best_prior_ts = row_start
+        else:
             last_stats = await get_instance(self.hass).async_add_executor_job(
                 get_last_statistics, self.hass, 1, statistic_id, True, {"sum"},
             )

@@ -48,7 +48,7 @@
         },
         "force_full": {
           "name": "Tving fuld import",
-          "description": "Nulstil den løbende sum og genimportér hver hentet aflæsning. Brug kun hvis statistikken viser en defekt total. Standard: fra."
+          "description": "Genimportér alle hentede aflæsninger, også allerede importerede perioder. Den løbende sum fortsætter fra det senest gemte punkt før det importerede tidsvindue. Standard: fra."
         }
       }
     }
