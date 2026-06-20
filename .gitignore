@@ -43,11 +43,13 @@ Thumbs.db
 !.env.example
 !.env.template
 
+# Local agent working notes (keep out of this public repo)
+.agent/
+
 # --- Workspace sync (managed by _workspace) ---
 .github/agents/
 .github/prompts/
 .github/instructions/
 .vscode/mcp.json
 .copilotignore
-.agent/
 # --- End workspace sync ---
