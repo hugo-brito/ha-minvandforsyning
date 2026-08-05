@@ -42,7 +42,6 @@ COL_INFO_CODE = "InfoCode"
 # Long-term statistics import
 CONF_IMPORT_STATISTICS = "import_statistics"
 DEFAULT_IMPORT_STATISTICS = True
-SUPPLIER_TIMEZONE = "Europe/Copenhagen"  # Rambøll API publishes Danish local time
 LITERS_PER_CUBIC_METER = 1000
 SERVICE_BACKFILL_STATISTICS = "backfill_statistics"
 # External statistic_id template — uses the ``<domain>:<object_id>`` form

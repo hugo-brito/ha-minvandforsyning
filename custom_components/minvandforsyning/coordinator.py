@@ -7,7 +7,6 @@ import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import (
@@ -36,7 +35,6 @@ from .const import (
     QUERY_LOOKBACK_HOURS,
     READINGS_TABLE_INDEX,
     STATISTIC_ID_FORMAT,
-    SUPPLIER_TIMEZONE,
 )
 from .protobuf_parser import parse_dataset
 
@@ -199,31 +197,22 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             )
         return result
 
-    def to_utc(
-        self,
-        naive_dt: datetime,
-        *,
-        prev_utc: datetime | None = None,
-    ) -> datetime:
-        """Convert a supplier-local datetime to UTC.
+    def reading_start_utc(self, reading_date: datetime) -> datetime:
+        """Return the UTC start of the hour a reading accounts for.
 
-        The Rambøll API publishes hourly readings as naive datetimes in
-        Danish local time. On the autumn DST fold (e.g. 2025-10-26) the local
-        clock hits ``02:00`` twice; readings arrive chronologically, so we
-        infer the second occurrence by comparing against the previously
-        emitted UTC instant. Already-aware datetimes are converted directly.
+        Verified against the live Rambøll API (issue #9): ``ReadingDate`` is a
+        UTC timestamp marking the *end* of the hourly consumption interval —
+        ``Consumption(T) == Reading(T) - Reading(T-1)``, i.e. the water used
+        during ``[T-1, T)``. Home Assistant statistics are keyed by the *start*
+        of the hour, so the bucket start is ``ReadingDate`` (as UTC) minus one
+        hour. UTC has no DST, so there is no fold or spring-forward gap to
+        handle.
         """
-        if naive_dt.tzinfo is not None:
-            return naive_dt.astimezone(timezone.utc)
-
-        tz = ZoneInfo(SUPPLIER_TIMEZONE)
-        aware = naive_dt.replace(tzinfo=tz, fold=0)
-        utc = aware.astimezone(timezone.utc)
-        if prev_utc is not None and utc <= prev_utc:
-            # Autumn fold: same naive hour seen twice; this one is post-DST.
-            aware = naive_dt.replace(tzinfo=tz, fold=1)
-            utc = aware.astimezone(timezone.utc)
-        return utc
+        if reading_date.tzinfo is not None:
+            reading_date = reading_date.astimezone(timezone.utc)
+        else:
+            reading_date = reading_date.replace(tzinfo=timezone.utc)
+        return reading_date - timedelta(hours=1)
 
     async def _safe_import_readings(self, data: MinvandforsyningData) -> None:
         """Run ``async_import_readings`` swallowing any failure.
@@ -327,7 +316,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         cutoff_ts: float | None = None
         sum_so_far = Decimal(0)
         if force_full:
-            first_start_utc = self.to_utc(data.readings[0].date).replace(
+            first_start_utc = self.reading_start_utc(data.readings[0].date).replace(
                 minute=0, second=0, microsecond=0,
             )
             # Preserve continuity when rewriting an overlapping recent window:
@@ -358,10 +347,8 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 sum_so_far = Decimal(str(last.get("sum") or 0))
 
         statistics: list[StatisticData] = []
-        prev_utc: datetime | None = None
         for reading in data.readings:
-            start_utc = self.to_utc(reading.date, prev_utc=prev_utc)
-            prev_utc = start_utc
+            start_utc = self.reading_start_utc(reading.date)
             # async_add_external_statistics rejects any timestamp not aligned
             # to the top of the hour; defend against an off-hour reading
             # corrupting the whole batch.

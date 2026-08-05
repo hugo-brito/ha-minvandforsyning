@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -17,7 +16,6 @@ from custom_components.minvandforsyning import (
 from custom_components.minvandforsyning.const import (
     DOMAIN,
     SERVICE_BACKFILL_STATISTICS,
-    SUPPLIER_TIMEZONE,
 )
 from custom_components.minvandforsyning.coordinator import (
     _HAS_STATISTIC_MEAN_TYPE,
@@ -38,13 +36,23 @@ from custom_components.minvandforsyning.coordinator import (
 # the standalone runner. The mocked boundary tests below cover the contract
 # we care about (correct call shape, idempotency, lock semantics).
 
-_DK = ZoneInfo(SUPPLIER_TIMEZONE)
 _DEFAULT_METER = "12345"
 _DEFAULT_STATISTIC_ID = f"{DOMAIN}:water_meter_{_DEFAULT_METER}_total"
 
 
+def _expected_start(reading_date: datetime) -> datetime:
+    """UTC bucket start for a reading, mirroring the production transform.
+
+    ``ReadingDate`` is a UTC timestamp marking the END of the consumption
+    hour, so the HA statistic bucket start is one hour earlier (issue #9).
+    """
+    if reading_date.tzinfo is None:
+        reading_date = reading_date.replace(tzinfo=timezone.utc)
+    return (reading_date - timedelta(hours=1)).astimezone(timezone.utc)
+
+
 def _reading(year: int, month: int, day: int, hour: int, total: str, consumption: str) -> MeterReading:
-    """Build a MeterReading with a naive Danish-local datetime."""
+    """Build a MeterReading with a naive UTC datetime (API end-of-hour)."""
     return MeterReading(
         date=datetime(year, month, day, hour),
         reading=Decimal(total),
@@ -66,7 +74,7 @@ def _make_coordinator(*, import_statistics: bool = True, meter: str = _DEFAULT_M
     """Construct a coordinator with mocked hass/client.
 
     Using a real coordinator instance (rather than a MagicMock) means the
-    locked behaviour of ``to_utc`` and the asyncio lock is exercised
+    locked behaviour of ``reading_start_utc`` and the asyncio lock is exercised
     end-to-end.
     """
     hass = MagicMock()
@@ -186,8 +194,8 @@ class _RecorderPatches:
 class TestSupplierTimestamps:
     @pytest.mark.asyncio
     async def test_import_uses_supplier_timestamp(self):
-        """Every imported StatisticData.start must equal the localized
-        ``MeterReading.date`` (in UTC after astimezone conversion)."""
+        """Every imported StatisticData.start must equal the reading's UTC
+        end-of-hour timestamp shifted back to the hour start (issue #9)."""
         coord = _make_coordinator()
         data = MinvandforsyningData(_sample_readings())
 
@@ -198,15 +206,13 @@ class TestSupplierTimestamps:
         _meta, stats = p.import_stats.call_args[0][1], p.import_stats.call_args[0][2]
         assert len(stats) == len(data.readings)
         for stat, reading in zip(stats, data.readings):
-            expected_utc = (
-                reading.date.replace(tzinfo=_DK).astimezone(timezone.utc)
-            )
+            expected_utc = _expected_start(reading.date)
             assert stat["start"].astimezone(timezone.utc) == expected_utc
 
     @pytest.mark.asyncio
-    async def test_naive_datetime_localized_to_supplier_tz(self):
-        """A naive 2026-06-05T09:00 reading must become 2026-06-05T07:00Z
-        (CEST = UTC+2 in June)."""
+    async def test_reading_is_utc_end_of_hour(self):
+        """ReadingDate is UTC and marks the END of the hour, so a naive
+        2026-06-05T09:00 reading must become 2026-06-05T08:00Z (issue #9)."""
         coord = _make_coordinator()
         data = MinvandforsyningData([
             MeterReading(
@@ -222,7 +228,7 @@ class TestSupplierTimestamps:
         stats = p.import_stats.call_args[0][2]
         assert len(stats) == 1
         as_utc = stats[0]["start"].astimezone(timezone.utc)
-        assert as_utc == datetime(2026, 6, 5, 7, 0, 0, tzinfo=timezone.utc)
+        assert as_utc == datetime(2026, 6, 5, 8, 0, 0, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +243,7 @@ class TestIdempotency:
         coord = _make_coordinator()
         readings = _sample_readings()
         data = MinvandforsyningData(readings)
-        cutoff_ts = readings[2].date.replace(tzinfo=_DK).timestamp()
+        cutoff_ts = _expected_start(readings[2].date).timestamp()
         last_stats = {
             _DEFAULT_STATISTIC_ID: [{"start": cutoff_ts, "sum": 1.0}],
         }
@@ -249,8 +255,8 @@ class TestIdempotency:
         stats = p.import_stats.call_args[0][2]
         # Readings 1, 2, 3 are <= cutoff → skipped. Readings 4, 5 imported.
         assert len(stats) == 2
-        expected_first = readings[3].date.replace(tzinfo=_DK).astimezone(timezone.utc)
-        expected_last = readings[4].date.replace(tzinfo=_DK).astimezone(timezone.utc)
+        expected_first = _expected_start(readings[3].date)
+        expected_last = _expected_start(readings[4].date)
         assert stats[0]["start"].astimezone(timezone.utc) == expected_first
         assert stats[-1]["start"].astimezone(timezone.utc) == expected_last
 
@@ -260,7 +266,7 @@ class TestIdempotency:
         coord = _make_coordinator()
         readings = _sample_readings()
         data = MinvandforsyningData(readings)
-        cutoff_ts = readings[-1].date.replace(tzinfo=_DK).timestamp()
+        cutoff_ts = _expected_start(readings[-1].date).timestamp()
         last_stats = {
             _DEFAULT_STATISTIC_ID: [{"start": cutoff_ts, "sum": 1.5}],
         }
@@ -284,8 +290,8 @@ class TestForceFullAndRunningSum:
         coord = _make_coordinator()
         readings = _sample_readings()
         data = MinvandforsyningData(readings)
-        first_ts = readings[0].date.replace(tzinfo=_DK).timestamp()
-        cutoff_ts = readings[-1].date.replace(tzinfo=_DK).timestamp()
+        first_ts = _expected_start(readings[0].date).timestamp()
+        cutoff_ts = _expected_start(readings[-1].date).timestamp()
         last_stats = {
             _DEFAULT_STATISTIC_ID: [
                 {"start": cutoff_ts, "sum": 99.0},  # inside rewritten window
@@ -314,7 +320,7 @@ class TestForceFullAndRunningSum:
         coord = _make_coordinator()
         readings = _sample_readings()
         data = MinvandforsyningData(readings)
-        first_ts = readings[0].date.replace(tzinfo=_DK).timestamp()
+        first_ts = _expected_start(readings[0].date).timestamp()
         last_stats = {
             _DEFAULT_STATISTIC_ID: [
                 {"start": first_ts, "sum": 3.0},
@@ -337,7 +343,7 @@ class TestForceFullAndRunningSum:
         coord = _make_coordinator()
         readings = _sample_readings()
         data = MinvandforsyningData(readings)
-        first_ts = readings[0].date.replace(tzinfo=_DK).timestamp()
+        first_ts = _expected_start(readings[0].date).timestamp()
         anchor_ts = first_ts - 3600
         in_window = [
             {"start": first_ts + i * 3600, "sum": 100.0 + i * 0.01}
@@ -382,7 +388,7 @@ class TestForceFullAndRunningSum:
         coord = _make_coordinator()
         readings = _sample_readings()
         data = MinvandforsyningData(readings)
-        first_ts = readings[0].date.replace(tzinfo=_DK).timestamp()
+        first_ts = _expected_start(readings[0].date).timestamp()
         last_stats = {
             _DEFAULT_STATISTIC_ID: [
                 {"start": first_ts, "sum": 99.0},
@@ -402,7 +408,7 @@ class TestForceFullAndRunningSum:
         coord = _make_coordinator()
         readings = _sample_readings()
         data = MinvandforsyningData(readings)
-        first_ts = readings[0].date.replace(tzinfo=_DK).timestamp()
+        first_ts = _expected_start(readings[0].date).timestamp()
         last_stats = {
             _DEFAULT_STATISTIC_ID: [
                 {"start": first_ts - 3600, "sum": None},
@@ -429,7 +435,7 @@ class TestForceFullAndRunningSum:
             ),
         ])
         # Cutoff strictly before the new reading.
-        cutoff_ts = datetime(2026, 4, 11, 9, tzinfo=_DK).timestamp()
+        cutoff_ts = _expected_start(datetime(2026, 4, 11, 9)).timestamp()
         last_stats = {
             _DEFAULT_STATISTIC_ID: [{"start": cutoff_ts, "sum": 10.0}],
         }
@@ -582,27 +588,28 @@ class TestExternalStatisticsMetadata:
 
 
 # ---------------------------------------------------------------------------
-# DST handling — autumn fold (ambiguous local time) and spring-forward
+# UTC semantics - ReadingDate is UTC end-of-hour, independent of Danish DST
+# (issue #9: Energy dashboard readings were 1 hour behind in summer).
 # ---------------------------------------------------------------------------
 
 
-class TestDstHandling:
+class TestUtcSemantics:
     @pytest.mark.asyncio
-    async def test_autumn_fold_disambiguated_by_order(self):
-        """On 2025-10-26 the local clock hits 02:00 twice (CEST→CET).
-        Two consecutive readings with naive 02:00 must map to two distinct
-        UTC instants exactly one hour apart."""
+    async def test_summer_and_winter_use_same_utc_offset(self):
+        """A naive 09:00 reading maps to 08:00Z in BOTH summer and winter.
+        The pre-fix code applied Danish DST and shifted the summer bucket an
+        extra hour earlier - the root cause of issue #9."""
         coord = _make_coordinator()
         data = MinvandforsyningData([
-            MeterReading(
-                date=datetime(2025, 10, 26, 2, 0, 0),  # first 02:00 (CEST = UTC+2)
+            MeterReading(  # summer (CEST) - pre-fix wrongly produced 06:00Z
+                date=datetime(2026, 6, 5, 9, 0, 0),
                 reading=Decimal("100.000"),
                 consumption=Decimal("100"),
             ),
-            MeterReading(
-                date=datetime(2025, 10, 26, 2, 0, 0),  # second 02:00 (CET = UTC+1)
+            MeterReading(  # winter (CET)
+                date=datetime(2026, 1, 15, 9, 0, 0),
                 reading=Decimal("100.100"),
-                consumption=Decimal("200"),
+                consumption=Decimal("100"),
             ),
         ])
 
@@ -610,22 +617,33 @@ class TestDstHandling:
             await coord.async_import_readings(data, force_full=True)
 
         stats = p.import_stats.call_args[0][2]
-        assert len(stats) == 2
-        first = stats[0]["start"].astimezone(timezone.utc)
-        second = stats[1]["start"].astimezone(timezone.utc)
-        assert first == datetime(2025, 10, 26, 0, 0, 0, tzinfo=timezone.utc)
-        assert second == datetime(2025, 10, 26, 1, 0, 0, tzinfo=timezone.utc)
-        assert second - first == timedelta(hours=1)
+        assert stats[0]["start"].astimezone(timezone.utc) == datetime(
+            2026, 6, 5, 8, 0, 0, tzinfo=timezone.utc,
+        )
+        assert stats[1]["start"].astimezone(timezone.utc) == datetime(
+            2026, 1, 15, 8, 0, 0, tzinfo=timezone.utc,
+        )
 
     @pytest.mark.asyncio
-    async def test_spring_forward_unambiguous_hour(self):
-        """On 2026-03-29 the local clock skips 02:00 → jumps to 03:00.
-        Naive 03:00 is unambiguous and must convert to 01:00 UTC (CEST=UTC+2)."""
+    async def test_spring_forward_hour_is_not_dropped(self):
+        """Naive 02:00 exists in UTC (it does not in Europe/Copenhagen on
+        2026-03-29). Consecutive readings across the DST instant stay exactly
+        one hour apart, with no gap."""
         coord = _make_coordinator()
         data = MinvandforsyningData([
+            MeterReading(
+                date=datetime(2026, 3, 29, 1, 0, 0),
+                reading=Decimal("100.000"),
+                consumption=Decimal("100"),
+            ),
+            MeterReading(
+                date=datetime(2026, 3, 29, 2, 0, 0),
+                reading=Decimal("100.100"),
+                consumption=Decimal("100"),
+            ),
             MeterReading(
                 date=datetime(2026, 3, 29, 3, 0, 0),
-                reading=Decimal("100.000"),
+                reading=Decimal("100.200"),
                 consumption=Decimal("100"),
             ),
         ])
@@ -634,10 +652,49 @@ class TestDstHandling:
             await coord.async_import_readings(data, force_full=True)
 
         stats = p.import_stats.call_args[0][2]
-        assert len(stats) == 1
-        assert stats[0]["start"].astimezone(timezone.utc) == datetime(
-            2026, 3, 29, 1, 0, 0, tzinfo=timezone.utc,
-        )
+        starts = [s["start"].astimezone(timezone.utc) for s in stats]
+        assert starts == [
+            datetime(2026, 3, 29, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 3, 29, 1, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 3, 29, 2, 0, 0, tzinfo=timezone.utc),
+        ]
+        assert starts[1] - starts[0] == timedelta(hours=1)
+        assert starts[2] - starts[1] == timedelta(hours=1)
+
+    @pytest.mark.asyncio
+    async def test_autumn_fallback_has_no_duplicate_bucket(self):
+        """Across the autumn transition (2025-10-26) UTC readings stay
+        distinct and monotonic - no fabricated fold, no bucket collision."""
+        coord = _make_coordinator()
+        data = MinvandforsyningData([
+            MeterReading(
+                date=datetime(2025, 10, 26, 1, 0, 0),
+                reading=Decimal("100.000"),
+                consumption=Decimal("100"),
+            ),
+            MeterReading(
+                date=datetime(2025, 10, 26, 2, 0, 0),
+                reading=Decimal("100.100"),
+                consumption=Decimal("100"),
+            ),
+            MeterReading(
+                date=datetime(2025, 10, 26, 3, 0, 0),
+                reading=Decimal("100.200"),
+                consumption=Decimal("100"),
+            ),
+        ])
+
+        with _RecorderPatches() as p:
+            await coord.async_import_readings(data, force_full=True)
+
+        stats = p.import_stats.call_args[0][2]
+        starts = [s["start"].astimezone(timezone.utc) for s in stats]
+        assert starts == [
+            datetime(2025, 10, 26, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(2025, 10, 26, 1, 0, 0, tzinfo=timezone.utc),
+            datetime(2025, 10, 26, 2, 0, 0, tzinfo=timezone.utc),
+        ]
+        assert len(set(starts)) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -753,7 +810,7 @@ class TestConcurrencyLock:
         cutoff_after_first = {
             _DEFAULT_STATISTIC_ID: [
                 {
-                    "start": readings[-1].date.replace(tzinfo=_DK).timestamp(),
+                    "start": _expected_start(readings[-1].date).timestamp(),
                     "sum": 1.5,
                 }
             ]
@@ -959,7 +1016,7 @@ class TestHydrate:
         """LTS stream already has data → no fetch, no import."""
         coord = _make_coordinator()
         coord.async_fetch_window = AsyncMock()
-        cutoff_ts = datetime(2026, 4, 11, tzinfo=_DK).timestamp()
+        cutoff_ts = _expected_start(datetime(2026, 4, 11)).timestamp()
         last_stats = {_DEFAULT_STATISTIC_ID: [{"start": cutoff_ts, "sum": 99.0}]}
 
         with _RecorderPatches(last_stats=last_stats) as p:
