@@ -33,6 +33,15 @@ API_TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 # Table index for hourly meter readings in the protobuf DataSet
 READINGS_TABLE_INDEX = 6
 
+# Rambøll API date semantics (verified via fixture analysis — see tests/test_api_semantics.py):
+# ReadingDate is a UTC naive datetime (protobuf Kind=Unspecified, values ARE UTC)
+# marking the END of each hourly consumption interval.
+# Consumption(T) == Reading(T) - Reading(T-1), i.e. water used during [T-1, T) UTC.
+# The bucket start for HA statistics is ReadingDate - 1 hour.
+# In winter (CET=UTC+1) the old code was coincidentally correct; in summer (CEST=UTC+2)
+# it was 1 hour off — the root cause of issue #9.
+READING_DATE_TZ = "Europe/Copenhagen"  # used only for daily_liters() local-day grouping
+
 # Column names in the readings table
 COL_READING_DATE = "ReadingDate"
 COL_READING = "Reading"
