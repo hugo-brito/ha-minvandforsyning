@@ -1,0 +1,4 @@
+# Generated test fixtures: keep byte-stable across platforms so the recorded
+# provenance hashes hold. See tests/fixtures/generator/PROVENANCE.txt.
+tests/fixtures/meter_data.bin binary
+tests/fixtures/ground_truth.json text eol=lf

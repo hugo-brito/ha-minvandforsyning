@@ -48,7 +48,7 @@ class TestDataSetStructure:
 
     @pytest.mark.parametrize(
         "index, expected_rows",
-        [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 2400), (7, 0)],
+        [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 168), (7, 0)],
     )
     def test_row_counts(self, tables, index, expected_rows):
         assert len(tables[index].rows) == expected_rows
@@ -59,24 +59,24 @@ class TestReadingsTable:
 
     def test_first_reading(self, tables):
         row = tables[6].rows[0]
-        assert row["TS"] == 227929
-        assert row["ReadingDate"] == datetime(2026, 1, 1, 1, 0, 0)
-        assert row["Reading"] == Decimal("281.857")
-        assert row["Consumption"] == Decimal("37")
-        assert row["TSOfPrior"] == 227928
+        assert row["TS"] == 1
+        assert row["ReadingDate"] == datetime(2025, 10, 24, 0, 0, 0)
+        assert row["Reading"] == Decimal("100")
+        assert row["Consumption"] == Decimal("0")
+        assert row["TSOfPrior"] == 0
 
     def test_second_reading(self, tables):
         row = tables[6].rows[1]
-        assert row["ReadingDate"] == datetime(2026, 1, 1, 2, 0, 0)
-        assert row["Reading"] == Decimal("281.881")
-        assert row["Consumption"] == Decimal("24")
+        assert row["ReadingDate"] == datetime(2025, 10, 24, 1, 0, 0)
+        assert row["Reading"] == Decimal("100")
+        assert row["Consumption"] == Decimal("0")
 
     def test_last_reading(self, tables):
         row = tables[6].rows[-1]
-        assert row["TS"] == 230328
-        assert row["ReadingDate"] == datetime(2026, 4, 11, 0, 0, 0)
-        assert row["Reading"] == Decimal("304.272")
-        assert row["Consumption"] == Decimal("0")
+        assert row["TS"] == 168
+        assert row["ReadingDate"] == datetime(2026, 3, 30, 23, 0, 0)
+        assert row["Reading"] == Decimal("103.052")
+        assert row["Consumption"] == Decimal("6")
 
     def test_all_readings_have_required_columns(self, tables):
         required = {"TS", "ReadingDate", "Reading", "Consumption"}
@@ -129,7 +129,7 @@ class TestGroundTruthComparison:
             py_dt = py_row["ReadingDate"]
             gt_dt = datetime.fromisoformat(gt_row["ReadingDate"])
             assert py_dt == gt_dt, f"Row {i} ReadingDate: {py_dt} != {gt_dt}"
-            # Compare Reading (C# outputs decimal as string like "281.857")
+            # Compare Reading (C# outputs decimal as string like "0.857")
             assert Decimal(gt_row["Reading"]) == py_row["Reading"], \
                 f"Row {i} Reading: {py_row['Reading']} != {gt_row['Reading']}"
             # Compare Consumption

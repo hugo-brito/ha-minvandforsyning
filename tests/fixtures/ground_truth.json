@@ -1,0 +1,1703 @@
+[
+  {
+    "index": 0,
+    "columns": [
+      {
+        "name": "MR_AnalysisID",
+        "type": "Int32"
+      },
+      {
+        "name": "CreatedDate",
+        "type": "DateTime"
+      }
+    ],
+    "rows": []
+  },
+  {
+    "index": 1,
+    "columns": [
+      {
+        "name": "MR_Analysis_ItemID",
+        "type": "Int32"
+      },
+      {
+        "name": "MR_AnalysisID",
+        "type": "Int32"
+      },
+      {
+        "name": "AnalysisType",
+        "type": "Int32"
+      },
+      {
+        "name": "KeyType",
+        "type": "Int32"
+      }
+    ],
+    "rows": []
+  },
+  {
+    "index": 2,
+    "columns": [
+      {
+        "name": "MR_Analysis_Item_AcuteNightConsumptionID",
+        "type": "Int32"
+      },
+      {
+        "name": "MR_Analysis_ItemID",
+        "type": "Int32"
+      },
+      {
+        "name": "NumberOfRealReadingsInInterval",
+        "type": "Int32"
+      },
+      {
+        "name": "NumberOfZeroConsumptionsInInterval",
+        "type": "Int32"
+      },
+      {
+        "name": "NumberOfHighAlertLevelConsumptions",
+        "type": "Int32"
+      }
+    ],
+    "rows": []
+  },
+  {
+    "index": 3,
+    "columns": [
+      {
+        "name": "MR_Analysis_Item_FullDayConsumptionID",
+        "type": "Int32"
+      },
+      {
+        "name": "MR_Analysis_ItemID",
+        "type": "Int32"
+      },
+      {
+        "name": "NumberOfRealReadingsInInterval",
+        "type": "Int32"
+      },
+      {
+        "name": "MinimumHourlyConsumption",
+        "type": "Decimal"
+      },
+      {
+        "name": "LatestZeroConsumption",
+        "type": "String"
+      }
+    ],
+    "rows": []
+  },
+  {
+    "index": 4,
+    "columns": [
+      {
+        "name": "MR_Analysis_Item_HistoricalNightConsumptionID",
+        "type": "Int32"
+      },
+      {
+        "name": "MR_Analysis_ItemID",
+        "type": "Int32"
+      },
+      {
+        "name": "NumberOfNightsWithMoreThan4HoursOfConsumption",
+        "type": "Int32"
+      },
+      {
+        "name": "Summed_TotalNightConsumption",
+        "type": "Decimal"
+      }
+    ],
+    "rows": []
+  },
+  {
+    "index": 5,
+    "columns": [
+      {
+        "name": "MR_Analysis_Item_InfoCodeID",
+        "type": "Int32"
+      },
+      {
+        "name": "MR_Analysis_ItemID",
+        "type": "Int32"
+      },
+      {
+        "name": "Reading",
+        "type": "Decimal"
+      },
+      {
+        "name": "ReadingDate",
+        "type": "DateTime"
+      },
+      {
+        "name": "InfoCode_Active",
+        "type": "Boolean"
+      },
+      {
+        "name": "InfoCode_Value",
+        "type": "Byte"
+      }
+    ],
+    "rows": []
+  },
+  {
+    "index": 6,
+    "columns": [
+      {
+        "name": "TS",
+        "type": "Int32"
+      },
+      {
+        "name": "ReadingDate",
+        "type": "DateTime"
+      },
+      {
+        "name": "Reading",
+        "type": "Decimal"
+      },
+      {
+        "name": "InfoCode",
+        "type": "Int32"
+      },
+      {
+        "name": "TSOfPrior",
+        "type": "Int32"
+      },
+      {
+        "name": "Consumption",
+        "type": "Decimal"
+      },
+      {
+        "name": "OwingNext",
+        "type": "Decimal"
+      }
+    ],
+    "rows": [
+      {
+        "TS": 1,
+        "ReadingDate": "2025-10-24T00:00:00.0000000",
+        "Reading": "100",
+        "InfoCode": null,
+        "TSOfPrior": 0,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 2,
+        "ReadingDate": "2025-10-24T01:00:00.0000000",
+        "Reading": "100",
+        "InfoCode": null,
+        "TSOfPrior": 1,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 3,
+        "ReadingDate": "2025-10-24T02:00:00.0000000",
+        "Reading": "100",
+        "InfoCode": null,
+        "TSOfPrior": 2,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 4,
+        "ReadingDate": "2025-10-24T03:00:00.0000000",
+        "Reading": "100",
+        "InfoCode": null,
+        "TSOfPrior": 3,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 5,
+        "ReadingDate": "2025-10-24T04:00:00.0000000",
+        "Reading": "100",
+        "InfoCode": null,
+        "TSOfPrior": 4,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 6,
+        "ReadingDate": "2025-10-24T05:00:00.0000000",
+        "Reading": "100.002",
+        "InfoCode": null,
+        "TSOfPrior": 5,
+        "Consumption": "2",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 7,
+        "ReadingDate": "2025-10-24T06:00:00.0000000",
+        "Reading": "100.02",
+        "InfoCode": null,
+        "TSOfPrior": 6,
+        "Consumption": "18",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 8,
+        "ReadingDate": "2025-10-24T07:00:00.0000000",
+        "Reading": "100.055",
+        "InfoCode": null,
+        "TSOfPrior": 7,
+        "Consumption": "35",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 9,
+        "ReadingDate": "2025-10-24T08:00:00.0000000",
+        "Reading": "100.077",
+        "InfoCode": null,
+        "TSOfPrior": 8,
+        "Consumption": "22",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 10,
+        "ReadingDate": "2025-10-24T09:00:00.0000000",
+        "Reading": "100.085",
+        "InfoCode": null,
+        "TSOfPrior": 9,
+        "Consumption": "8",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 11,
+        "ReadingDate": "2025-10-24T10:00:00.0000000",
+        "Reading": "100.097",
+        "InfoCode": null,
+        "TSOfPrior": 10,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 12,
+        "ReadingDate": "2025-10-24T11:00:00.0000000",
+        "Reading": "100.117",
+        "InfoCode": null,
+        "TSOfPrior": 11,
+        "Consumption": "20",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 13,
+        "ReadingDate": "2025-10-24T12:00:00.0000000",
+        "Reading": "100.157",
+        "InfoCode": null,
+        "TSOfPrior": 12,
+        "Consumption": "40",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 14,
+        "ReadingDate": "2025-10-24T13:00:00.0000000",
+        "Reading": "100.166",
+        "InfoCode": null,
+        "TSOfPrior": 13,
+        "Consumption": "9",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 15,
+        "ReadingDate": "2025-10-24T14:00:00.0000000",
+        "Reading": "100.199",
+        "InfoCode": null,
+        "TSOfPrior": 14,
+        "Consumption": "33",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 16,
+        "ReadingDate": "2025-10-24T15:00:00.0000000",
+        "Reading": "100.213",
+        "InfoCode": null,
+        "TSOfPrior": 15,
+        "Consumption": "14",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 17,
+        "ReadingDate": "2025-10-24T16:00:00.0000000",
+        "Reading": "100.232",
+        "InfoCode": null,
+        "TSOfPrior": 16,
+        "Consumption": "19",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 18,
+        "ReadingDate": "2025-10-24T17:00:00.0000000",
+        "Reading": "100.26",
+        "InfoCode": null,
+        "TSOfPrior": 17,
+        "Consumption": "28",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 19,
+        "ReadingDate": "2025-10-24T18:00:00.0000000",
+        "Reading": "100.315",
+        "InfoCode": null,
+        "TSOfPrior": 18,
+        "Consumption": "55",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 20,
+        "ReadingDate": "2025-10-24T19:00:00.0000000",
+        "Reading": "100.359",
+        "InfoCode": null,
+        "TSOfPrior": 19,
+        "Consumption": "44",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 21,
+        "ReadingDate": "2025-10-24T20:00:00.0000000",
+        "Reading": "100.397",
+        "InfoCode": null,
+        "TSOfPrior": 20,
+        "Consumption": "38",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 22,
+        "ReadingDate": "2025-10-24T21:00:00.0000000",
+        "Reading": "100.418",
+        "InfoCode": null,
+        "TSOfPrior": 21,
+        "Consumption": "21",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 23,
+        "ReadingDate": "2025-10-24T22:00:00.0000000",
+        "Reading": "100.43",
+        "InfoCode": null,
+        "TSOfPrior": 22,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 24,
+        "ReadingDate": "2025-10-24T23:00:00.0000000",
+        "Reading": "100.436",
+        "InfoCode": null,
+        "TSOfPrior": 23,
+        "Consumption": "6",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 25,
+        "ReadingDate": "2025-10-25T00:00:00.0000000",
+        "Reading": "100.436",
+        "InfoCode": null,
+        "TSOfPrior": 24,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 26,
+        "ReadingDate": "2025-10-25T01:00:00.0000000",
+        "Reading": "100.436",
+        "InfoCode": null,
+        "TSOfPrior": 25,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 27,
+        "ReadingDate": "2025-10-25T02:00:00.0000000",
+        "Reading": "100.436",
+        "InfoCode": null,
+        "TSOfPrior": 26,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 28,
+        "ReadingDate": "2025-10-25T03:00:00.0000000",
+        "Reading": "100.436",
+        "InfoCode": null,
+        "TSOfPrior": 27,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 29,
+        "ReadingDate": "2025-10-25T04:00:00.0000000",
+        "Reading": "100.436",
+        "InfoCode": null,
+        "TSOfPrior": 28,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 30,
+        "ReadingDate": "2025-10-25T05:00:00.0000000",
+        "Reading": "100.438",
+        "InfoCode": null,
+        "TSOfPrior": 29,
+        "Consumption": "2",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 31,
+        "ReadingDate": "2025-10-25T06:00:00.0000000",
+        "Reading": "100.456",
+        "InfoCode": null,
+        "TSOfPrior": 30,
+        "Consumption": "18",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 32,
+        "ReadingDate": "2025-10-25T07:00:00.0000000",
+        "Reading": "100.491",
+        "InfoCode": null,
+        "TSOfPrior": 31,
+        "Consumption": "35",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 33,
+        "ReadingDate": "2025-10-25T08:00:00.0000000",
+        "Reading": "100.513",
+        "InfoCode": null,
+        "TSOfPrior": 32,
+        "Consumption": "22",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 34,
+        "ReadingDate": "2025-10-25T09:00:00.0000000",
+        "Reading": "100.521",
+        "InfoCode": null,
+        "TSOfPrior": 33,
+        "Consumption": "8",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 35,
+        "ReadingDate": "2025-10-25T10:00:00.0000000",
+        "Reading": "100.533",
+        "InfoCode": null,
+        "TSOfPrior": 34,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 36,
+        "ReadingDate": "2025-10-25T11:00:00.0000000",
+        "Reading": "100.553",
+        "InfoCode": null,
+        "TSOfPrior": 35,
+        "Consumption": "20",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 37,
+        "ReadingDate": "2025-10-25T12:00:00.0000000",
+        "Reading": "100.593",
+        "InfoCode": null,
+        "TSOfPrior": 36,
+        "Consumption": "40",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 38,
+        "ReadingDate": "2025-10-25T13:00:00.0000000",
+        "Reading": "100.602",
+        "InfoCode": null,
+        "TSOfPrior": 37,
+        "Consumption": "9",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 39,
+        "ReadingDate": "2025-10-25T14:00:00.0000000",
+        "Reading": "100.635",
+        "InfoCode": null,
+        "TSOfPrior": 38,
+        "Consumption": "33",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 40,
+        "ReadingDate": "2025-10-25T15:00:00.0000000",
+        "Reading": "100.649",
+        "InfoCode": null,
+        "TSOfPrior": 39,
+        "Consumption": "14",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 41,
+        "ReadingDate": "2025-10-25T16:00:00.0000000",
+        "Reading": "100.668",
+        "InfoCode": null,
+        "TSOfPrior": 40,
+        "Consumption": "19",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 42,
+        "ReadingDate": "2025-10-25T17:00:00.0000000",
+        "Reading": "100.696",
+        "InfoCode": null,
+        "TSOfPrior": 41,
+        "Consumption": "28",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 43,
+        "ReadingDate": "2025-10-25T18:00:00.0000000",
+        "Reading": "100.751",
+        "InfoCode": null,
+        "TSOfPrior": 42,
+        "Consumption": "55",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 44,
+        "ReadingDate": "2025-10-25T19:00:00.0000000",
+        "Reading": "100.795",
+        "InfoCode": null,
+        "TSOfPrior": 43,
+        "Consumption": "44",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 45,
+        "ReadingDate": "2025-10-25T20:00:00.0000000",
+        "Reading": "100.833",
+        "InfoCode": null,
+        "TSOfPrior": 44,
+        "Consumption": "38",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 46,
+        "ReadingDate": "2025-10-25T21:00:00.0000000",
+        "Reading": "100.854",
+        "InfoCode": null,
+        "TSOfPrior": 45,
+        "Consumption": "21",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 47,
+        "ReadingDate": "2025-10-25T22:00:00.0000000",
+        "Reading": "100.866",
+        "InfoCode": null,
+        "TSOfPrior": 46,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 48,
+        "ReadingDate": "2025-10-25T23:00:00.0000000",
+        "Reading": "100.872",
+        "InfoCode": null,
+        "TSOfPrior": 47,
+        "Consumption": "6",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 49,
+        "ReadingDate": "2025-10-26T00:00:00.0000000",
+        "Reading": "100.872",
+        "InfoCode": null,
+        "TSOfPrior": 48,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 50,
+        "ReadingDate": "2025-10-26T01:00:00.0000000",
+        "Reading": "100.872",
+        "InfoCode": null,
+        "TSOfPrior": 49,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 51,
+        "ReadingDate": "2025-10-26T02:00:00.0000000",
+        "Reading": "100.872",
+        "InfoCode": null,
+        "TSOfPrior": 50,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 52,
+        "ReadingDate": "2025-10-26T03:00:00.0000000",
+        "Reading": "100.872",
+        "InfoCode": null,
+        "TSOfPrior": 51,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 53,
+        "ReadingDate": "2025-10-26T04:00:00.0000000",
+        "Reading": "100.872",
+        "InfoCode": null,
+        "TSOfPrior": 52,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 54,
+        "ReadingDate": "2025-10-26T05:00:00.0000000",
+        "Reading": "100.874",
+        "InfoCode": null,
+        "TSOfPrior": 53,
+        "Consumption": "2",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 55,
+        "ReadingDate": "2025-10-26T06:00:00.0000000",
+        "Reading": "100.892",
+        "InfoCode": null,
+        "TSOfPrior": 54,
+        "Consumption": "18",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 56,
+        "ReadingDate": "2025-10-26T07:00:00.0000000",
+        "Reading": "100.927",
+        "InfoCode": null,
+        "TSOfPrior": 55,
+        "Consumption": "35",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 57,
+        "ReadingDate": "2025-10-26T08:00:00.0000000",
+        "Reading": "100.949",
+        "InfoCode": null,
+        "TSOfPrior": 56,
+        "Consumption": "22",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 58,
+        "ReadingDate": "2025-10-26T09:00:00.0000000",
+        "Reading": "100.957",
+        "InfoCode": null,
+        "TSOfPrior": 57,
+        "Consumption": "8",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 59,
+        "ReadingDate": "2025-10-26T10:00:00.0000000",
+        "Reading": "100.969",
+        "InfoCode": null,
+        "TSOfPrior": 58,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 60,
+        "ReadingDate": "2025-10-26T11:00:00.0000000",
+        "Reading": "100.989",
+        "InfoCode": null,
+        "TSOfPrior": 59,
+        "Consumption": "20",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 61,
+        "ReadingDate": "2025-10-26T12:00:00.0000000",
+        "Reading": "101.029",
+        "InfoCode": null,
+        "TSOfPrior": 60,
+        "Consumption": "40",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 62,
+        "ReadingDate": "2025-10-26T13:00:00.0000000",
+        "Reading": "101.038",
+        "InfoCode": null,
+        "TSOfPrior": 61,
+        "Consumption": "9",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 63,
+        "ReadingDate": "2025-10-26T14:00:00.0000000",
+        "Reading": "101.071",
+        "InfoCode": null,
+        "TSOfPrior": 62,
+        "Consumption": "33",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 64,
+        "ReadingDate": "2025-10-26T15:00:00.0000000",
+        "Reading": "101.085",
+        "InfoCode": null,
+        "TSOfPrior": 63,
+        "Consumption": "14",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 65,
+        "ReadingDate": "2025-10-26T16:00:00.0000000",
+        "Reading": "101.104",
+        "InfoCode": null,
+        "TSOfPrior": 64,
+        "Consumption": "19",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 66,
+        "ReadingDate": "2025-10-26T17:00:00.0000000",
+        "Reading": "101.132",
+        "InfoCode": null,
+        "TSOfPrior": 65,
+        "Consumption": "28",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 67,
+        "ReadingDate": "2025-10-26T18:00:00.0000000",
+        "Reading": "101.187",
+        "InfoCode": null,
+        "TSOfPrior": 66,
+        "Consumption": "55",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 68,
+        "ReadingDate": "2025-10-26T19:00:00.0000000",
+        "Reading": "101.231",
+        "InfoCode": null,
+        "TSOfPrior": 67,
+        "Consumption": "44",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 69,
+        "ReadingDate": "2025-10-26T20:00:00.0000000",
+        "Reading": "101.269",
+        "InfoCode": null,
+        "TSOfPrior": 68,
+        "Consumption": "38",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 70,
+        "ReadingDate": "2025-10-26T21:00:00.0000000",
+        "Reading": "101.29",
+        "InfoCode": null,
+        "TSOfPrior": 69,
+        "Consumption": "21",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 71,
+        "ReadingDate": "2025-10-26T22:00:00.0000000",
+        "Reading": "101.302",
+        "InfoCode": null,
+        "TSOfPrior": 70,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 72,
+        "ReadingDate": "2025-10-26T23:00:00.0000000",
+        "Reading": "101.308",
+        "InfoCode": null,
+        "TSOfPrior": 71,
+        "Consumption": "6",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 73,
+        "ReadingDate": "2025-10-27T00:00:00.0000000",
+        "Reading": "101.308",
+        "InfoCode": null,
+        "TSOfPrior": 72,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 74,
+        "ReadingDate": "2025-10-27T01:00:00.0000000",
+        "Reading": "101.308",
+        "InfoCode": null,
+        "TSOfPrior": 73,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 75,
+        "ReadingDate": "2025-10-27T02:00:00.0000000",
+        "Reading": "101.308",
+        "InfoCode": null,
+        "TSOfPrior": 74,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 76,
+        "ReadingDate": "2025-10-27T03:00:00.0000000",
+        "Reading": "101.308",
+        "InfoCode": null,
+        "TSOfPrior": 75,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 77,
+        "ReadingDate": "2025-10-27T04:00:00.0000000",
+        "Reading": "101.308",
+        "InfoCode": null,
+        "TSOfPrior": 76,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 78,
+        "ReadingDate": "2025-10-27T05:00:00.0000000",
+        "Reading": "101.31",
+        "InfoCode": null,
+        "TSOfPrior": 77,
+        "Consumption": "2",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 79,
+        "ReadingDate": "2025-10-27T06:00:00.0000000",
+        "Reading": "101.328",
+        "InfoCode": null,
+        "TSOfPrior": 78,
+        "Consumption": "18",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 80,
+        "ReadingDate": "2025-10-27T07:00:00.0000000",
+        "Reading": "101.363",
+        "InfoCode": null,
+        "TSOfPrior": 79,
+        "Consumption": "35",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 81,
+        "ReadingDate": "2025-10-27T08:00:00.0000000",
+        "Reading": "101.385",
+        "InfoCode": null,
+        "TSOfPrior": 80,
+        "Consumption": "22",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 82,
+        "ReadingDate": "2025-10-27T09:00:00.0000000",
+        "Reading": "101.393",
+        "InfoCode": null,
+        "TSOfPrior": 81,
+        "Consumption": "8",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 83,
+        "ReadingDate": "2025-10-27T10:00:00.0000000",
+        "Reading": "101.405",
+        "InfoCode": null,
+        "TSOfPrior": 82,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 84,
+        "ReadingDate": "2025-10-27T11:00:00.0000000",
+        "Reading": "101.425",
+        "InfoCode": null,
+        "TSOfPrior": 83,
+        "Consumption": "20",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 85,
+        "ReadingDate": "2025-10-27T12:00:00.0000000",
+        "Reading": "101.465",
+        "InfoCode": null,
+        "TSOfPrior": 84,
+        "Consumption": "40",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 86,
+        "ReadingDate": "2025-10-27T13:00:00.0000000",
+        "Reading": "101.474",
+        "InfoCode": null,
+        "TSOfPrior": 85,
+        "Consumption": "9",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 87,
+        "ReadingDate": "2025-10-27T14:00:00.0000000",
+        "Reading": "101.507",
+        "InfoCode": null,
+        "TSOfPrior": 86,
+        "Consumption": "33",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 88,
+        "ReadingDate": "2025-10-27T15:00:00.0000000",
+        "Reading": "101.521",
+        "InfoCode": null,
+        "TSOfPrior": 87,
+        "Consumption": "14",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 89,
+        "ReadingDate": "2025-10-27T16:00:00.0000000",
+        "Reading": "101.54",
+        "InfoCode": null,
+        "TSOfPrior": 88,
+        "Consumption": "19",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 90,
+        "ReadingDate": "2025-10-27T17:00:00.0000000",
+        "Reading": "101.568",
+        "InfoCode": null,
+        "TSOfPrior": 89,
+        "Consumption": "28",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 91,
+        "ReadingDate": "2025-10-27T18:00:00.0000000",
+        "Reading": "101.623",
+        "InfoCode": null,
+        "TSOfPrior": 90,
+        "Consumption": "55",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 92,
+        "ReadingDate": "2025-10-27T19:00:00.0000000",
+        "Reading": "101.667",
+        "InfoCode": null,
+        "TSOfPrior": 91,
+        "Consumption": "44",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 93,
+        "ReadingDate": "2025-10-27T20:00:00.0000000",
+        "Reading": "101.705",
+        "InfoCode": null,
+        "TSOfPrior": 92,
+        "Consumption": "38",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 94,
+        "ReadingDate": "2025-10-27T21:00:00.0000000",
+        "Reading": "101.726",
+        "InfoCode": null,
+        "TSOfPrior": 93,
+        "Consumption": "21",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 95,
+        "ReadingDate": "2025-10-27T22:00:00.0000000",
+        "Reading": "101.738",
+        "InfoCode": null,
+        "TSOfPrior": 94,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 96,
+        "ReadingDate": "2025-10-27T23:00:00.0000000",
+        "Reading": "101.744",
+        "InfoCode": null,
+        "TSOfPrior": 95,
+        "Consumption": "6",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 97,
+        "ReadingDate": "2026-03-28T00:00:00.0000000",
+        "Reading": "101.744",
+        "InfoCode": null,
+        "TSOfPrior": 96,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 98,
+        "ReadingDate": "2026-03-28T01:00:00.0000000",
+        "Reading": "101.744",
+        "InfoCode": null,
+        "TSOfPrior": 97,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 99,
+        "ReadingDate": "2026-03-28T02:00:00.0000000",
+        "Reading": "101.744",
+        "InfoCode": null,
+        "TSOfPrior": 98,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 100,
+        "ReadingDate": "2026-03-28T03:00:00.0000000",
+        "Reading": "101.744",
+        "InfoCode": null,
+        "TSOfPrior": 99,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 101,
+        "ReadingDate": "2026-03-28T04:00:00.0000000",
+        "Reading": "101.744",
+        "InfoCode": null,
+        "TSOfPrior": 100,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 102,
+        "ReadingDate": "2026-03-28T05:00:00.0000000",
+        "Reading": "101.746",
+        "InfoCode": null,
+        "TSOfPrior": 101,
+        "Consumption": "2",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 103,
+        "ReadingDate": "2026-03-28T06:00:00.0000000",
+        "Reading": "101.764",
+        "InfoCode": null,
+        "TSOfPrior": 102,
+        "Consumption": "18",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 104,
+        "ReadingDate": "2026-03-28T07:00:00.0000000",
+        "Reading": "101.799",
+        "InfoCode": null,
+        "TSOfPrior": 103,
+        "Consumption": "35",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 105,
+        "ReadingDate": "2026-03-28T08:00:00.0000000",
+        "Reading": "101.821",
+        "InfoCode": null,
+        "TSOfPrior": 104,
+        "Consumption": "22",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 106,
+        "ReadingDate": "2026-03-28T09:00:00.0000000",
+        "Reading": "101.829",
+        "InfoCode": null,
+        "TSOfPrior": 105,
+        "Consumption": "8",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 107,
+        "ReadingDate": "2026-03-28T10:00:00.0000000",
+        "Reading": "101.841",
+        "InfoCode": null,
+        "TSOfPrior": 106,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 108,
+        "ReadingDate": "2026-03-28T11:00:00.0000000",
+        "Reading": "101.861",
+        "InfoCode": null,
+        "TSOfPrior": 107,
+        "Consumption": "20",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 109,
+        "ReadingDate": "2026-03-28T12:00:00.0000000",
+        "Reading": "101.901",
+        "InfoCode": null,
+        "TSOfPrior": 108,
+        "Consumption": "40",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 110,
+        "ReadingDate": "2026-03-28T13:00:00.0000000",
+        "Reading": "101.91",
+        "InfoCode": null,
+        "TSOfPrior": 109,
+        "Consumption": "9",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 111,
+        "ReadingDate": "2026-03-28T14:00:00.0000000",
+        "Reading": "101.943",
+        "InfoCode": null,
+        "TSOfPrior": 110,
+        "Consumption": "33",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 112,
+        "ReadingDate": "2026-03-28T15:00:00.0000000",
+        "Reading": "101.957",
+        "InfoCode": null,
+        "TSOfPrior": 111,
+        "Consumption": "14",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 113,
+        "ReadingDate": "2026-03-28T16:00:00.0000000",
+        "Reading": "101.976",
+        "InfoCode": null,
+        "TSOfPrior": 112,
+        "Consumption": "19",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 114,
+        "ReadingDate": "2026-03-28T17:00:00.0000000",
+        "Reading": "102.004",
+        "InfoCode": null,
+        "TSOfPrior": 113,
+        "Consumption": "28",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 115,
+        "ReadingDate": "2026-03-28T18:00:00.0000000",
+        "Reading": "102.059",
+        "InfoCode": null,
+        "TSOfPrior": 114,
+        "Consumption": "55",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 116,
+        "ReadingDate": "2026-03-28T19:00:00.0000000",
+        "Reading": "102.103",
+        "InfoCode": null,
+        "TSOfPrior": 115,
+        "Consumption": "44",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 117,
+        "ReadingDate": "2026-03-28T20:00:00.0000000",
+        "Reading": "102.141",
+        "InfoCode": null,
+        "TSOfPrior": 116,
+        "Consumption": "38",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 118,
+        "ReadingDate": "2026-03-28T21:00:00.0000000",
+        "Reading": "102.162",
+        "InfoCode": null,
+        "TSOfPrior": 117,
+        "Consumption": "21",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 119,
+        "ReadingDate": "2026-03-28T22:00:00.0000000",
+        "Reading": "102.174",
+        "InfoCode": null,
+        "TSOfPrior": 118,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 120,
+        "ReadingDate": "2026-03-28T23:00:00.0000000",
+        "Reading": "102.18",
+        "InfoCode": null,
+        "TSOfPrior": 119,
+        "Consumption": "6",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 121,
+        "ReadingDate": "2026-03-29T00:00:00.0000000",
+        "Reading": "102.18",
+        "InfoCode": null,
+        "TSOfPrior": 120,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 122,
+        "ReadingDate": "2026-03-29T01:00:00.0000000",
+        "Reading": "102.18",
+        "InfoCode": null,
+        "TSOfPrior": 121,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 123,
+        "ReadingDate": "2026-03-29T02:00:00.0000000",
+        "Reading": "102.18",
+        "InfoCode": null,
+        "TSOfPrior": 122,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 124,
+        "ReadingDate": "2026-03-29T03:00:00.0000000",
+        "Reading": "102.18",
+        "InfoCode": null,
+        "TSOfPrior": 123,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 125,
+        "ReadingDate": "2026-03-29T04:00:00.0000000",
+        "Reading": "102.18",
+        "InfoCode": null,
+        "TSOfPrior": 124,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 126,
+        "ReadingDate": "2026-03-29T05:00:00.0000000",
+        "Reading": "102.182",
+        "InfoCode": null,
+        "TSOfPrior": 125,
+        "Consumption": "2",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 127,
+        "ReadingDate": "2026-03-29T06:00:00.0000000",
+        "Reading": "102.2",
+        "InfoCode": null,
+        "TSOfPrior": 126,
+        "Consumption": "18",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 128,
+        "ReadingDate": "2026-03-29T07:00:00.0000000",
+        "Reading": "102.235",
+        "InfoCode": null,
+        "TSOfPrior": 127,
+        "Consumption": "35",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 129,
+        "ReadingDate": "2026-03-29T08:00:00.0000000",
+        "Reading": "102.257",
+        "InfoCode": null,
+        "TSOfPrior": 128,
+        "Consumption": "22",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 130,
+        "ReadingDate": "2026-03-29T09:00:00.0000000",
+        "Reading": "102.265",
+        "InfoCode": null,
+        "TSOfPrior": 129,
+        "Consumption": "8",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 131,
+        "ReadingDate": "2026-03-29T10:00:00.0000000",
+        "Reading": "102.277",
+        "InfoCode": null,
+        "TSOfPrior": 130,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 132,
+        "ReadingDate": "2026-03-29T11:00:00.0000000",
+        "Reading": "102.297",
+        "InfoCode": null,
+        "TSOfPrior": 131,
+        "Consumption": "20",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 133,
+        "ReadingDate": "2026-03-29T12:00:00.0000000",
+        "Reading": "102.337",
+        "InfoCode": null,
+        "TSOfPrior": 132,
+        "Consumption": "40",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 134,
+        "ReadingDate": "2026-03-29T13:00:00.0000000",
+        "Reading": "102.346",
+        "InfoCode": null,
+        "TSOfPrior": 133,
+        "Consumption": "9",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 135,
+        "ReadingDate": "2026-03-29T14:00:00.0000000",
+        "Reading": "102.379",
+        "InfoCode": null,
+        "TSOfPrior": 134,
+        "Consumption": "33",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 136,
+        "ReadingDate": "2026-03-29T15:00:00.0000000",
+        "Reading": "102.393",
+        "InfoCode": null,
+        "TSOfPrior": 135,
+        "Consumption": "14",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 137,
+        "ReadingDate": "2026-03-29T16:00:00.0000000",
+        "Reading": "102.412",
+        "InfoCode": null,
+        "TSOfPrior": 136,
+        "Consumption": "19",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 138,
+        "ReadingDate": "2026-03-29T17:00:00.0000000",
+        "Reading": "102.44",
+        "InfoCode": null,
+        "TSOfPrior": 137,
+        "Consumption": "28",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 139,
+        "ReadingDate": "2026-03-29T18:00:00.0000000",
+        "Reading": "102.495",
+        "InfoCode": null,
+        "TSOfPrior": 138,
+        "Consumption": "55",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 140,
+        "ReadingDate": "2026-03-29T19:00:00.0000000",
+        "Reading": "102.539",
+        "InfoCode": null,
+        "TSOfPrior": 139,
+        "Consumption": "44",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 141,
+        "ReadingDate": "2026-03-29T20:00:00.0000000",
+        "Reading": "102.577",
+        "InfoCode": null,
+        "TSOfPrior": 140,
+        "Consumption": "38",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 142,
+        "ReadingDate": "2026-03-29T21:00:00.0000000",
+        "Reading": "102.598",
+        "InfoCode": null,
+        "TSOfPrior": 141,
+        "Consumption": "21",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 143,
+        "ReadingDate": "2026-03-29T22:00:00.0000000",
+        "Reading": "102.61",
+        "InfoCode": null,
+        "TSOfPrior": 142,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 144,
+        "ReadingDate": "2026-03-29T23:00:00.0000000",
+        "Reading": "102.616",
+        "InfoCode": null,
+        "TSOfPrior": 143,
+        "Consumption": "6",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 145,
+        "ReadingDate": "2026-03-30T00:00:00.0000000",
+        "Reading": "102.616",
+        "InfoCode": null,
+        "TSOfPrior": 144,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 146,
+        "ReadingDate": "2026-03-30T01:00:00.0000000",
+        "Reading": "102.616",
+        "InfoCode": null,
+        "TSOfPrior": 145,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 147,
+        "ReadingDate": "2026-03-30T02:00:00.0000000",
+        "Reading": "102.616",
+        "InfoCode": null,
+        "TSOfPrior": 146,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 148,
+        "ReadingDate": "2026-03-30T03:00:00.0000000",
+        "Reading": "102.616",
+        "InfoCode": null,
+        "TSOfPrior": 147,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 149,
+        "ReadingDate": "2026-03-30T04:00:00.0000000",
+        "Reading": "102.616",
+        "InfoCode": null,
+        "TSOfPrior": 148,
+        "Consumption": "0",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 150,
+        "ReadingDate": "2026-03-30T05:00:00.0000000",
+        "Reading": "102.618",
+        "InfoCode": null,
+        "TSOfPrior": 149,
+        "Consumption": "2",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 151,
+        "ReadingDate": "2026-03-30T06:00:00.0000000",
+        "Reading": "102.636",
+        "InfoCode": null,
+        "TSOfPrior": 150,
+        "Consumption": "18",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 152,
+        "ReadingDate": "2026-03-30T07:00:00.0000000",
+        "Reading": "102.671",
+        "InfoCode": null,
+        "TSOfPrior": 151,
+        "Consumption": "35",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 153,
+        "ReadingDate": "2026-03-30T08:00:00.0000000",
+        "Reading": "102.693",
+        "InfoCode": null,
+        "TSOfPrior": 152,
+        "Consumption": "22",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 154,
+        "ReadingDate": "2026-03-30T09:00:00.0000000",
+        "Reading": "102.701",
+        "InfoCode": null,
+        "TSOfPrior": 153,
+        "Consumption": "8",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 155,
+        "ReadingDate": "2026-03-30T10:00:00.0000000",
+        "Reading": "102.713",
+        "InfoCode": null,
+        "TSOfPrior": 154,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 156,
+        "ReadingDate": "2026-03-30T11:00:00.0000000",
+        "Reading": "102.733",
+        "InfoCode": null,
+        "TSOfPrior": 155,
+        "Consumption": "20",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 157,
+        "ReadingDate": "2026-03-30T12:00:00.0000000",
+        "Reading": "102.773",
+        "InfoCode": null,
+        "TSOfPrior": 156,
+        "Consumption": "40",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 158,
+        "ReadingDate": "2026-03-30T13:00:00.0000000",
+        "Reading": "102.782",
+        "InfoCode": null,
+        "TSOfPrior": 157,
+        "Consumption": "9",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 159,
+        "ReadingDate": "2026-03-30T14:00:00.0000000",
+        "Reading": "102.815",
+        "InfoCode": null,
+        "TSOfPrior": 158,
+        "Consumption": "33",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 160,
+        "ReadingDate": "2026-03-30T15:00:00.0000000",
+        "Reading": "102.829",
+        "InfoCode": null,
+        "TSOfPrior": 159,
+        "Consumption": "14",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 161,
+        "ReadingDate": "2026-03-30T16:00:00.0000000",
+        "Reading": "102.848",
+        "InfoCode": null,
+        "TSOfPrior": 160,
+        "Consumption": "19",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 162,
+        "ReadingDate": "2026-03-30T17:00:00.0000000",
+        "Reading": "102.876",
+        "InfoCode": null,
+        "TSOfPrior": 161,
+        "Consumption": "28",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 163,
+        "ReadingDate": "2026-03-30T18:00:00.0000000",
+        "Reading": "102.931",
+        "InfoCode": null,
+        "TSOfPrior": 162,
+        "Consumption": "55",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 164,
+        "ReadingDate": "2026-03-30T19:00:00.0000000",
+        "Reading": "102.975",
+        "InfoCode": null,
+        "TSOfPrior": 163,
+        "Consumption": "44",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 165,
+        "ReadingDate": "2026-03-30T20:00:00.0000000",
+        "Reading": "103.013",
+        "InfoCode": null,
+        "TSOfPrior": 164,
+        "Consumption": "38",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 166,
+        "ReadingDate": "2026-03-30T21:00:00.0000000",
+        "Reading": "103.034",
+        "InfoCode": null,
+        "TSOfPrior": 165,
+        "Consumption": "21",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 167,
+        "ReadingDate": "2026-03-30T22:00:00.0000000",
+        "Reading": "103.046",
+        "InfoCode": null,
+        "TSOfPrior": 166,
+        "Consumption": "12",
+        "OwingNext": "0"
+      },
+      {
+        "TS": 168,
+        "ReadingDate": "2026-03-30T23:00:00.0000000",
+        "Reading": "103.052",
+        "InfoCode": null,
+        "TSOfPrior": 167,
+        "Consumption": "6",
+        "OwingNext": "0"
+      }
+    ]
+  },
+  {
+    "index": 7,
+    "columns": [
+      {
+        "name": "AnalysisType",
+        "type": "Int32"
+      },
+      {
+        "name": "MeterInAnalysisCount",
+        "type": "Int32"
+      }
+    ],
+    "rows": []
+  }
+]

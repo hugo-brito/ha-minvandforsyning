@@ -1,0 +1,11 @@
+Synthetic fixture provenance
+============================
+Generator     : tests/fixtures/generator (FixtureGen)
+Runtime       : .NET 9 SDK (mcr.microsoft.com/dotnet/sdk:9.0)
+NuGet package : protobuf-net-data 4.0.0 (pinned)
+Globalization : invariant (InvariantGlobalization=true, InvariantCulture formatting)
+Output        : deterministic, byte-identical on regeneration
+
+SHA-256:
+  meter_data.bin     C2D3DB574A118B2880988E2E488F3FC2EBD4DE1FA40161C37465A7D2723E2EE8
+  ground_truth.json  0CFE8BA7AE7BF5ADDDE75352A538DC6F2F83B3139C5B9201744FE0FC98D7421B
