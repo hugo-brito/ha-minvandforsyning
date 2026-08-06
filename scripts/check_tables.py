@@ -31,7 +31,7 @@ async def main():
         client = MinvandforsyningClient(session)
         now = datetime.now(timezone.utc)
         raw = await client.async_get_meter_data(
-            "99999999", 15,
+            "YOUR_METER_ID", 15,
             now - timedelta(days=90),
             now + timedelta(days=1),
         )

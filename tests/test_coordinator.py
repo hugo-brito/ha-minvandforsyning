@@ -2,9 +2,11 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
+from custom_components.minvandforsyning.const import READING_DATE_TZ
 from custom_components.minvandforsyning.coordinator import MeterReading, MinvandforsyningCoordinator, MinvandforsyningData
 
 
@@ -64,6 +66,56 @@ class TestMinvandforsyningData:
         data = MinvandforsyningData([])
         assert data.daily_liters(datetime(2026, 4, 12)) == Decimal("0")
 
+    def test_daily_liters_summer_hour_ending_at_local_midnight_counts_previous_day(self):
+        """Summer (CEST=UTC+2): the reading ending 22:00Z covers [21:00Z, 22:00Z)
+        = 23:00-00:00 CEST on Jun 5, so it belongs to Jun 5, not Jun 6. This
+        matches its statistics bucket (start 21:00Z, shown at 23:00 local)."""
+        data = MinvandforsyningData([
+            _reading(2026, 6, 5, 21, "300.000", "10"),  # [20:00Z, 21:00Z) = 22:00-23:00 CEST Jun 5
+            _reading(2026, 6, 5, 22, "300.010", "20"),  # [21:00Z, 22:00Z) = 23:00-00:00 CEST Jun 5
+        ])
+        jun5 = datetime(2026, 6, 5, tzinfo=ZoneInfo(READING_DATE_TZ))
+        jun6 = datetime(2026, 6, 6, tzinfo=ZoneInfo(READING_DATE_TZ))
+        assert data.daily_liters(jun5) == Decimal("30")
+        assert data.daily_liters(jun6) == Decimal("0")
+
+    def test_daily_liters_winter_hour_ending_at_local_midnight_counts_previous_day(self):
+        """Winter (CET=UTC+1): the reading ending 23:00Z covers [22:00Z, 23:00Z)
+        = 23:00-00:00 CET on Jan 15, so it belongs to Jan 15, not Jan 16."""
+        data = MinvandforsyningData([
+            _reading(2026, 1, 15, 22, "300.000", "15"),  # [21:00Z, 22:00Z) = 22:00-23:00 CET Jan 15
+            _reading(2026, 1, 15, 23, "300.015", "25"),  # [22:00Z, 23:00Z) = 23:00-00:00 CET Jan 15
+        ])
+        local_jan15 = datetime(2026, 1, 15, tzinfo=ZoneInfo(READING_DATE_TZ))
+        local_jan16 = datetime(2026, 1, 16, tzinfo=ZoneInfo(READING_DATE_TZ))
+        assert data.daily_liters(local_jan15) == Decimal("40")
+        assert data.daily_liters(local_jan16) == Decimal("0")
+
+    def test_daily_liters_returns_zero_for_missing_local_day(self):
+        data = MinvandforsyningData([
+            _reading(2026, 6, 5, 22, "300.000", "20"),  # interval start 21:00Z = 23:00 CEST Jun 5
+        ])
+        assert data.daily_liters(datetime(2026, 6, 5, tzinfo=ZoneInfo(READING_DATE_TZ))) == Decimal("20")
+        assert data.daily_liters(datetime(2026, 6, 7, tzinfo=ZoneInfo(READING_DATE_TZ))) == Decimal("0")
+
+    def test_daily_grouping_agrees_with_statistics_bucket(self):
+        """The daily-sensor local day equals the local day of the statistics
+        bucket start for the same reading, in both winter and summer, so the
+        daily sensor and the Energy dashboard never disagree on ownership."""
+        for month in (1, 6):  # winter (CET) and summer (CEST)
+            reading = _reading(2026, month, 15, 22, "300.000", "10")
+            bucket_local_day = (
+                MinvandforsyningCoordinator.reading_start_utc(reading.date)
+                .astimezone(ZoneInfo(READING_DATE_TZ))
+                .date()
+            )
+            data = MinvandforsyningData([reading])
+            local_midnight = datetime(
+                bucket_local_day.year, bucket_local_day.month, bucket_local_day.day,
+                tzinfo=ZoneInfo(READING_DATE_TZ),
+            )
+            assert data.daily_liters(local_midnight) == Decimal("10")
+
 
 class TestCoordinatorDateRange:
     """Regression: DateTo must be tomorrow to include today's intraday data.
@@ -91,7 +143,7 @@ class TestCoordinatorDateRange:
         client.async_get_meter_data = AsyncMock(side_effect=capture_meter_data)
 
         coordinator = MinvandforsyningCoordinator(
-            hass, client, "99999999", 15,
+            hass, client, "99999999", 1,
             import_statistics=False,
         )
 

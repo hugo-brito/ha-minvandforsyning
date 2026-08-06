@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import (
@@ -33,6 +34,7 @@ from .const import (
     INITIAL_HYDRATE_DAYS,
     LITERS_PER_CUBIC_METER,
     QUERY_LOOKBACK_HOURS,
+    READING_DATE_TZ,
     READINGS_TABLE_INDEX,
     STATISTIC_ID_FORMAT,
 )
@@ -50,6 +52,23 @@ except ImportError:  # pragma: no cover - HA < 2024.11
     _HAS_STATISTIC_MEAN_TYPE = False
 
 _LOGGER = logging.getLogger(__name__)
+_READING_DATE_ZONE = ZoneInfo(READING_DATE_TZ)
+
+
+def _interval_start_utc(reading_date: datetime) -> datetime:
+    """Return the UTC start of the hourly interval a reading accounts for.
+
+    ``ReadingDate`` marks the *end* of the interval ``[ReadingDate - 1h,
+    ReadingDate)`` and its naive value is UTC (issue #9). The one-hour
+    subtraction is interval-label semantics, not a timezone offset. Pure: no
+    clamping or logging, so it is safe to share between statistics import and
+    the daily sensor.
+    """
+    if reading_date.tzinfo is not None:
+        utc_end = reading_date.astimezone(timezone.utc)
+    else:
+        utc_end = reading_date.replace(tzinfo=timezone.utc)
+    return utc_end - timedelta(hours=1)
 
 
 class MeterReading:
@@ -84,12 +103,24 @@ class MinvandforsyningData:
         return latest.consumption if latest else None
 
     def daily_liters(self, date: datetime | None = None) -> Decimal:
-        """Sum consumption for a given date (default: today)."""
+        """Sum consumption for a local civil day (default: today).
+
+        Each reading is assigned to the Copenhagen local date of its interval
+        *start*, matching the hourly statistics bucket so the daily sensor and
+        the Energy dashboard agree on which day an hour belongs to. The hour
+        ending at local midnight counts toward the day it was used, not the
+        next one.
+        """
         if date is None:
-            date = datetime.now()
+            date = datetime.now(tz=_READING_DATE_ZONE)
         target_date = date.date()
         return sum(
-            (r.consumption for r in self.readings if r.date.date() == target_date),
+            (
+                r.consumption
+                for r in self.readings
+                if _interval_start_utc(r.date).astimezone(_READING_DATE_ZONE).date()
+                == target_date
+            ),
             Decimal(0),
         )
 
@@ -197,7 +228,8 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             )
         return result
 
-    def reading_start_utc(self, reading_date: datetime) -> datetime:
+    @staticmethod
+    def reading_start_utc(reading_date: datetime) -> datetime:
         """Return the UTC start of the hour a reading accounts for.
 
         Verified against the live Rambøll API (issue #9): ``ReadingDate`` is a
@@ -208,11 +240,15 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         hour. UTC has no DST, so there is no fold or spring-forward gap to
         handle.
         """
-        if reading_date.tzinfo is not None:
-            reading_date = reading_date.astimezone(timezone.utc)
-        else:
-            reading_date = reading_date.replace(tzinfo=timezone.utc)
-        return reading_date - timedelta(hours=1)
+        start = _interval_start_utc(reading_date)
+        if start.minute or start.second or start.microsecond:
+            clamped = start.replace(minute=0, second=0, microsecond=0)
+            _LOGGER.warning(
+                "ReadingDate %s is not on the hour; clamping statistic bucket start to %s",
+                reading_date, clamped,
+            )
+            start = clamped
+        return start
 
     async def _safe_import_readings(self, data: MinvandforsyningData) -> None:
         """Run ``async_import_readings`` swallowing any failure.
@@ -316,9 +352,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         cutoff_ts: float | None = None
         sum_so_far = Decimal(0)
         if force_full:
-            first_start_utc = self.reading_start_utc(data.readings[0].date).replace(
-                minute=0, second=0, microsecond=0,
-            )
+            first_start_utc = self.reading_start_utc(data.readings[0].date)
             # Preserve continuity when rewriting an overlapping recent window:
             # use the latest stored sum strictly before the first imported
             # bucket as the starting point. Time-bounded query so the cost
@@ -349,10 +383,6 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         statistics: list[StatisticData] = []
         for reading in data.readings:
             start_utc = self.reading_start_utc(reading.date)
-            # async_add_external_statistics rejects any timestamp not aligned
-            # to the top of the hour; defend against an off-hour reading
-            # corrupting the whole batch.
-            start_utc = start_utc.replace(minute=0, second=0, microsecond=0)
             if cutoff_ts is not None and start_utc.timestamp() <= cutoff_ts:
                 continue
             delta = reading.consumption / Decimal(LITERS_PER_CUBIC_METER)
