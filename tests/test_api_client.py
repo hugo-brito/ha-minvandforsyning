@@ -3,11 +3,55 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import ClientResponseError
 
 from custom_components.minvandforsyning.api_client import (
     AuthTokens,
     MinvandforsyningClient,
 )
+
+
+def _make_response(*, status=200, body=b""):
+    resp = AsyncMock()
+    resp.status = status
+    resp.headers = {}
+    resp.raise_for_status = MagicMock()
+    if status >= 400:
+        resp.raise_for_status.side_effect = ClientResponseError(
+            request_info=MagicMock(), history=(), status=status, message="error",
+        )
+    resp.read = AsyncMock(return_value=body)
+    resp.__aenter__ = AsyncMock(return_value=resp)
+    resp.__aexit__ = AsyncMock(return_value=False)
+    return resp
+
+
+def _varint(value):
+    encoded = bytearray()
+    while value > 127:
+        encoded.append((value & 127) | 128)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def _discovery_payload(reading_date=None, *, padding=0):
+    """Build a synthetic DataSet with an optional zero-valued meter reading."""
+    columns = [("ReadingDate", 2), ("Reading", 12), ("Consumption", 12)]
+    if padding:
+        columns.append(("Padding" + "x" * padding, 1))
+
+    data = b"\x0b\x0c" * 6 + b"\x0b"
+    for name, proto_type in columns:
+        encoded_name = name.encode("ascii")
+        data += b"\x13\x0a" + _varint(len(encoded_name)) + encoded_name
+        data += b"\x10" + _varint(proto_type) + b"\x14"
+
+    if reading_date is not None:
+        seconds = int(reading_date.timestamp())
+        data += b"\x1b\x0b\x08" + _varint(seconds * 2) + b"\x10\x03\x0c"
+        data += b"\x13\x08\x00\x14\x1b\x08\x00\x1c\x1c"
+    return data + b"\x0c"
 
 
 class TestAuthTokens:
@@ -141,15 +185,11 @@ class TestMinvandforsyningClient:
             datetime.now(timezone.utc) + timedelta(hours=1),
         )
 
-        mock_resp = AsyncMock()
-        mock_resp.status = 429
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
-        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.get = MagicMock(return_value=_make_response(status=429))
 
-        result = await client.async_discover_supplier_id("12345678")
-        assert result is None
-        # Should stop after first 429, not continue all 300
+        with pytest.raises(ClientResponseError) as exc_info:
+            await client.async_discover_supplier_id("12345678")
+        assert exc_info.value.status == 429
         assert mock_session.get.call_count == 1
 
 
@@ -171,18 +211,7 @@ class TestTokenRefreshOn401:
 
     def _make_resp(self, *, status=200, body=b""):
         """Create a mock response usable as an async context manager."""
-        resp = AsyncMock()
-        resp.status = status
-        resp.raise_for_status = MagicMock()
-        if status >= 400:
-            from aiohttp import ClientResponseError
-            resp.raise_for_status.side_effect = ClientResponseError(
-                request_info=MagicMock(), history=(), status=status, message="error",
-            )
-        resp.read = AsyncMock(return_value=body)
-        resp.__aenter__ = AsyncMock(return_value=resp)
-        resp.__aexit__ = AsyncMock(return_value=False)
-        return resp
+        return _make_response(status=status, body=body)
 
     def _set_fresh_tokens(self, client, mock_session):
         """Mock async_get_tokens to return fresh tokens after invalidation."""
@@ -319,19 +348,7 @@ class TestTransientErrorRetry:
             yield m
 
     def _make_resp(self, *, status=200, body=b""):
-        resp = AsyncMock()
-        resp.status = status
-        resp.headers = {}
-        resp.raise_for_status = MagicMock()
-        if status >= 400:
-            from aiohttp import ClientResponseError
-            resp.raise_for_status.side_effect = ClientResponseError(
-                request_info=MagicMock(), history=(), status=status, message="error",
-            )
-        resp.read = AsyncMock(return_value=body)
-        resp.__aenter__ = AsyncMock(return_value=resp)
-        resp.__aexit__ = AsyncMock(return_value=False)
-        return resp
+        return _make_response(status=status, body=body)
 
     @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
     @pytest.mark.asyncio
@@ -497,3 +514,143 @@ class TestTransientErrorRetry:
         import inspect
         source = inspect.getsource(MinvandforsyningClient.async_get_tokens)
         assert "timedelta(minutes=5)" in source
+
+
+class TestSupplierDiscovery:
+    @pytest.fixture
+    def mock_session(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def client(self, mock_session):
+        client = MinvandforsyningClient(mock_session)
+        client._tokens = AuthTokens(
+            "ctx", "auth", datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        return client
+
+    @pytest.fixture(autouse=True)
+    def no_sleep(self):
+        with patch(
+            "custom_components.minvandforsyning.api_client.asyncio.sleep",
+            AsyncMock(),
+        ):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_small_payload_with_zero_reading_is_a_match(self, client, mock_session):
+        body = _discovery_payload(datetime.now(timezone.utc))
+        assert len(body) <= 910
+        mock_session.get.return_value = _make_response(body=body)
+
+        assert await client.async_discover_supplier_id("12345678") == 1
+        assert mock_session.get.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_large_empty_schema_is_not_a_match(self, client, mock_session):
+        empty = _discovery_payload(padding=1000)
+        assert len(empty) > 910
+        mock_session.get.side_effect = [
+            _make_response(body=empty),
+            _make_response(body=_discovery_payload(datetime.now(timezone.utc))),
+        ]
+
+        assert await client.async_discover_supplier_id("12345678") == 2
+        assert mock_session.get.call_count == 2
+
+    @pytest.mark.parametrize("reading_age_days", [0, 5])
+    @pytest.mark.asyncio
+    async def test_today_and_delayed_readings_are_discovered(
+        self, client, mock_session, reading_age_days,
+    ):
+        reading_date = datetime.now(timezone.utc) - timedelta(days=reading_age_days)
+        populated = _discovery_payload(reading_date, padding=1000)
+        empty = _discovery_payload()
+
+        def respond(url, *, params, headers):
+            start = datetime.fromisoformat(params["DateFrom"]).date()
+            end = datetime.fromisoformat(params["DateTo"]).date()
+            body = populated if start <= reading_date.date() < end else empty
+            return _make_response(body=body)
+
+        mock_session.get.side_effect = respond
+
+        assert await client.async_discover_supplier_id("12345678") == 1
+        assert mock_session.get.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_extended_scan_uses_only_the_requested_range(
+        self, client, mock_session,
+    ):
+        mock_session.get.side_effect = [
+            _make_response(body=_discovery_payload()),
+            _make_response(body=_discovery_payload(datetime.now(timezone.utc))),
+        ]
+
+        result = await client.async_discover_supplier_id(
+            "12345678", scan_start=501, scan_end=503,
+        )
+
+        assert result == 502
+        assert [
+            call.kwargs["params"]["SupplierID"]
+            for call in mock_session.get.call_args_list
+        ] == ["501", "502"]
+
+    @pytest.mark.parametrize("scan_start,scan_end", [(0, 10), (5, 4), (1, 501)])
+    @pytest.mark.asyncio
+    async def test_invalid_scan_range_sends_no_requests(
+        self, client, mock_session, scan_start, scan_end,
+    ):
+        with pytest.raises(ValueError):
+            await client.async_discover_supplier_id(
+                "12345678", scan_start=scan_start, scan_end=scan_end,
+            )
+        mock_session.get.assert_not_called()
+
+    @pytest.mark.parametrize("status", [403, 503])
+    @pytest.mark.asyncio
+    async def test_http_errors_do_not_look_like_missing_meters(
+        self, client, mock_session, status,
+    ):
+        mock_session.get.return_value = _make_response(status=status)
+
+        with pytest.raises(ClientResponseError) as exc_info:
+            await client.async_discover_supplier_id("12345678")
+
+        assert exc_info.value.status == status
+        assert {
+            call.kwargs["params"]["SupplierID"]
+            for call in mock_session.get.call_args_list
+        } == {"1"}
+
+    @pytest.mark.asyncio
+    async def test_401_refreshes_tokens_without_skipping_the_supplier(
+        self, client, mock_session,
+    ):
+        fresh = AuthTokens(
+            "fresh_ctx", "fresh_auth", datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        mock_session.get.side_effect = [
+            _make_response(status=401),
+            _make_response(body=_discovery_payload(datetime.now(timezone.utc))),
+        ]
+        with patch.object(
+            client, "async_get_tokens",
+            AsyncMock(side_effect=[client._tokens, fresh]),
+        ):
+            result = await client.async_discover_supplier_id("12345678")
+
+        assert result == 1
+        calls = mock_session.get.call_args_list
+        assert [call.kwargs["params"]["SupplierID"] for call in calls] == ["1", "1"]
+        assert calls[1].kwargs["headers"]["Authorization"] == "Bearer fresh_auth"
+
+    @pytest.mark.parametrize("body", [b"\x80", b"\x0b\x0c" * 7])
+    @pytest.mark.asyncio
+    async def test_invalid_payload_stops_discovery(self, client, mock_session, body):
+        mock_session.get.return_value = _make_response(body=body)
+
+        with pytest.raises(ValueError):
+            await client.async_discover_supplier_id("12345678")
+        assert mock_session.get.call_count == 1
