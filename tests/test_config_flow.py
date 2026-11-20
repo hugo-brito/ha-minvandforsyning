@@ -1,7 +1,11 @@
 """Tests for the MinVandforsyning config flow, run through Home Assistant."""
 import asyncio
+import json
 from collections.abc import Generator
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -16,12 +20,28 @@ from homeassistant.data_entry_flow import (
     InvalidData,
 )
 from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.test_util.aiohttp import (
+    AiohttpClientMocker,
+    AiohttpClientMockResponse,
+)
+from yarl import URL
 
 from custom_components.minvandforsyning.api_client import InvalidResponseError
-from custom_components.minvandforsyning.const import DOMAIN
+from custom_components.minvandforsyning.const import (
+    BROKER_API_URL,
+    DOMAIN,
+    METER_DATA_PATH,
+    TOKEN_GENERATOR_URL,
+    TOKEN_PATH,
+)
 from custom_components.minvandforsyning.suppliers import KNOWN_SUPPLIERS
 
+from .test_statistics_import import _supplier_response
+
 METER = "12345678"
+METER_DATA_URL = URL(f"{BROKER_API_URL}{METER_DATA_PATH}")
+# Taken before the known_suppliers fixture replaces the list in every test.
+SHIPPED_SUPPLIERS = dict(KNOWN_SUPPLIERS)
 
 
 def _http_error(status: int) -> ClientResponseError:
@@ -73,6 +93,40 @@ def client() -> Generator[MagicMock]:
         yield client
 
 
+@pytest.fixture
+def api(aioclient_mock: AiohttpClientMocker) -> AiohttpClientMocker:
+    """Answer the real client's token request; tests add the meter data answers."""
+    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+    aioclient_mock.post(
+        f"{TOKEN_GENERATOR_URL}{TOKEN_PATH}",
+        json={
+            "success": True,
+            "payload": {
+                "anonymousUserContextToken": "context",
+                "easyAuthToken": "token",
+                "expiry": expiry.isoformat(),
+            },
+        },
+    )
+    return aioclient_mock
+
+
+@pytest.fixture
+def long_waits() -> Generator[list[float]]:
+    """Record waits of a second or more instead of waiting."""
+    real_sleep = asyncio.sleep
+    waits: list[float] = []
+
+    async def sleep(delay: float, *args: Any, **kwargs: Any) -> Any:
+        if delay >= 1:
+            waits.append(delay)
+            return None
+        return await real_sleep(delay, *args, **kwargs)
+
+    with patch("asyncio.sleep", sleep):
+        yield waits
+
+
 async def _configure(
     hass: HomeAssistant, result: FlowResult, user_input: dict | None = None,
 ) -> FlowResult:
@@ -97,6 +151,16 @@ async def _finish_search(hass: HomeAssistant, result: FlowResult) -> FlowResult:
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     await hass.async_block_till_done()
     return await _configure(hass, result)
+
+
+def _assert_texts_show(result: FlowResult) -> None:
+    """Every value the step passes appears in its text, in every language."""
+    component = Path(__file__).parents[1] / "custom_components" / DOMAIN
+    for path in (component / "strings.json", *(component / "translations").glob("*.json")):
+        strings = json.loads(path.read_text(encoding="utf-8"))
+        text = strings["config"]["step"][result["step_id"]]["description"]
+        for key in result["description_placeholders"]:
+            assert f"{{{key}}}" in text, (path.name, key)
 
 
 async def test_meter_number_is_required(hass: HomeAssistant) -> None:
@@ -176,6 +240,7 @@ async def test_choose_supplier_from_the_list(
         "supplier_name": "Example Vandværk",
         "latest_reading": "103.052",
     }
+    _assert_texts_show(result)
 
     result = await _configure(hass, result, {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -199,6 +264,15 @@ async def test_supplier_list_is_in_danish_order_with_not_listed_last(
     assert options[-1]["value"] == "not_listed"
     # Sorting in the frontend would move the last option.
     assert not selector.config.get("sort")
+
+
+def test_shipped_supplier_names_are_plain_text() -> None:
+    """Names come from public issues, and setup shows them as markdown."""
+    assert SHIPPED_SUPPLIERS
+    for supplier_id, name in SHIPPED_SUPPLIERS.items():
+        assert type(supplier_id) is int and supplier_id >= 1
+        assert name == name.strip() and 2 <= len(name) <= 80, name
+        assert not set(name) & set("[]<>*_`#|~\\\n"), name
 
 
 async def test_not_listed_returns_to_the_other_options(hass: HomeAssistant) -> None:
@@ -241,12 +315,41 @@ async def test_supplier_id_errors_can_be_retried(
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "manual_supplier"
     assert result["errors"] == errors
+    # The form keeps the entered ID, so it can be sent again as is.
+    [field] = result["data_schema"].schema
+    assert field.description == {"suggested_value": 900}
 
     result = await _configure(hass, result, {"supplier_id": 900})
     assert result["step_id"] == "confirm"
     result = await _configure(hass, result, {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["result"].unique_id == METER
+
+
+async def test_a_rate_limited_supplier_check_fails_at_once(
+    hass: HomeAssistant, api: AiohttpClientMocker, long_waits: list[float],
+) -> None:
+    """The API's Retry-After can be hours, and the form would wait for it."""
+    api.get(METER_DATA_URL, status=429, headers={"Retry-After": "86400"})
+    result = await _choose(hass, "manual_supplier")
+
+    result = await _configure(hass, result, {"supplier_id": 900})
+
+    assert result["errors"] == {"base": "rate_limited"}
+    assert long_waits == []
+
+
+async def test_a_meter_that_reads_zero_can_be_added(
+    hass: HomeAssistant, client: MagicMock,
+) -> None:
+    """A new meter's first reading can be 0 m³."""
+    client.async_get_latest_reading.return_value = Decimal("0")
+    result = await _choose(hass, "manual_supplier")
+
+    result = await _configure(hass, result, {"supplier_id": 900})
+
+    assert result["step_id"] == "confirm"
+    assert result["description_placeholders"]["latest_reading"] == "0"
 
 
 async def test_unlisted_supplier_id_offers_a_share_link(
@@ -261,7 +364,10 @@ async def test_unlisted_supplier_id_offers_a_share_link(
     assert result["description_placeholders"] == {
         "meter_number": METER, "supplier_id": "900", "latest_reading": "103.052",
     }
-    client.async_get_latest_reading.assert_awaited_once_with(METER, 900)
+    _assert_texts_show(result)
+    client.async_get_latest_reading.assert_awaited_once_with(
+        METER, 900, retry_rate_limited=False,
+    )
 
     result = await _configure(hass, result, {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -329,6 +435,26 @@ async def test_search_reports_progress_and_offers_the_next_range(
     assert progress == [0.33, 0.67, 1.0, 0.33, 0.67, 1.0]
 
 
+async def test_each_further_search_checks_the_next_500_ids(
+    hass: HomeAssistant, client: MagicMock,
+) -> None:
+    result = await _finish_search(hass, await _choose(hass, "discover_supplier"))
+    for _ in range(2):
+        result = await _configure(hass, result, {"next_step_id": "discover_next"})
+        result = await _finish_search(hass, result)
+
+    assert [
+        (call.kwargs["scan_start"], call.kwargs["scan_end"])
+        for call in client.async_discover_supplier_id.await_args_list
+    ] == [(1, 500), (501, 1000), (1001, 1500)]
+    assert result["step_id"] == "discover_failed"
+    assert result["menu_options"] == ["discover_next", "manual_supplier"]
+    assert (
+        result["description_placeholders"]["next_start"],
+        result["description_placeholders"]["next_end"],
+    ) == ("1501", "2000")
+
+
 async def test_search_can_find_a_listed_supplier(
     hass: HomeAssistant, client: MagicMock,
 ) -> None:
@@ -349,6 +475,43 @@ async def test_search_can_find_a_listed_supplier(
     assert result["result"].unique_id == METER
     assert result["data"] == {"meter_number": METER, "supplier_id": 42}
     assert result["description"] is None
+
+
+async def test_a_search_that_finishes_at_once_still_asks_for_confirmation(
+    hass: HomeAssistant, client: MagicMock,
+) -> None:
+    client.async_discover_supplier_id.return_value = 42
+
+    result = await _finish_search(hass, await _choose(hass, "discover_supplier"))
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "confirm_known"
+
+
+async def test_a_rate_limited_preview_does_not_hold_up_the_search(
+    hass: HomeAssistant, api: AiohttpClientMocker, long_waits: list[float],
+) -> None:
+    reading_date = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+    answers = [
+        AiohttpClientMockResponse(
+            "get", METER_DATA_URL, response=_supplier_response([(reading_date, "103.052", "6")]),
+        ),
+        AiohttpClientMockResponse(
+            "get", METER_DATA_URL, status=429, headers={"Retry-After": "86400"},
+        ),
+    ]
+
+    async def meter_data(method: str, url: URL, data: Any) -> AiohttpClientMockResponse:
+        # The search finds the listed supplier, then the preview is rate limited.
+        return answers.pop(0) if len(answers) > 1 else answers[0]
+
+    api.get(METER_DATA_URL, side_effect=meter_data)
+
+    result = await _finish_search(hass, await _choose(hass, "discover_supplier"))
+
+    assert result["step_id"] == "confirm_known"
+    assert result["description_placeholders"]["latest_reading"] == "?"
+    assert long_waits == []
 
 
 @pytest.mark.parametrize(
@@ -392,9 +555,12 @@ async def test_closing_the_dialog_cancels_the_search(
     client.async_discover_supplier_id.side_effect = search
     result = await _choose(hass, "discover_supplier")
     assert result["type"] is FlowResultType.SHOW_PROGRESS
-    await started.wait()
+    # Bounded waits, so a search that keeps running fails the test instead of
+    # hanging it.
+    async with asyncio.timeout(10):
+        await started.wait()
 
     hass.config_entries.flow.async_abort(result["flow_id"])
-    await hass.async_block_till_done()
 
-    assert cancelled.is_set()
+    async with asyncio.timeout(10):
+        await cancelled.wait()

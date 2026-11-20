@@ -106,7 +106,7 @@ The `sensor.water_meter_<meter_number>_total_consumption` entity continues to wo
 `minvandforsyning.backfill_statistics` has two modes:
 
 - With `days` set (1 to 1825): fetches that many days of history from the supplier and imports it.
-- With `days` omitted: re-imports the most recently cached batch (up to 48 h from the last poll).
+- With `days` omitted: re-imports the readings from the last poll (about the last 7 days).
 
 ```yaml
 service: minvandforsyning.backfill_statistics
@@ -197,7 +197,7 @@ Debug and warning log lines include your meter number. If you're sharing logs in
 
 ## Adding a supplier to the list
 
-Supplier suggestions arrive through the **Add a water supplier** issue form. To add one, put its supplier ID and name in `KNOWN_SUPPLIERS` in [`suppliers.py`](custom_components/minvandforsyning/suppliers.py). Setup sorts the list by name. Only add IDs that a successful setup has confirmed.
+Supplier suggestions arrive through the **Add a water supplier** issue form. To add one, put its supplier ID and name in `KNOWN_SUPPLIERS` in [`suppliers.py`](custom_components/minvandforsyning/suppliers.py). Setup sorts the list by name. Only add IDs that a successful setup has confirmed, and copy the name as plain text from the supplier's own website: setup shows it as Markdown, so a name from an issue could otherwise add a link.
 
 ## License
 

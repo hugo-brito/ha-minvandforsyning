@@ -35,15 +35,17 @@ from .const import (
     DOMAIN,
     INITIAL_HYDRATE_DAYS,
     LITERS_PER_CUBIC_METER,
-    QUERY_LOOKBACK_HOURS,
     READING_DATE_TZ,
     READINGS_TABLE_INDEX,
     STATISTIC_ID_FORMAT,
+    SUPPLIER_LOOKUP_DAYS,
 )
 from .protobuf_parser import parse_dataset
 
 _LOGGER = logging.getLogger(__name__)
 _READING_DATE_ZONE = ZoneInfo(READING_DATE_TZ)
+# How long an import waits for the recorder to store its rows.
+_RECORDER_COMMIT_TIMEOUT_SECONDS = 300
 
 
 def _interval_start_utc(reading_date: datetime) -> datetime:
@@ -144,6 +146,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         # background import task triggered by a previous refresh can't race
         # the next refresh's import or a backfill service call.
         self._stats_lock = asyncio.Lock()
+        self._history_failed = False
 
     @property
     def meter_number(self) -> str:
@@ -163,7 +166,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
     async def async_fetch_window(self, days: int) -> MinvandforsyningData:
         """Fetch and parse meter data for the last *days* days.
 
-        Shared by the recurring poll (called with ``QUERY_LOOKBACK_HOURS // 24``)
+        Shared by the recurring poll (called with ``SUPPLIER_LOOKUP_DAYS``)
         and by hydrate / backfill service (called with up to
         ``INITIAL_HYDRATE_DAYS``). Returns parsed :class:`MinvandforsyningData`;
         raises :class:`UpdateFailed` on failure.
@@ -210,9 +213,9 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
 
     async def _async_update_data(self) -> MinvandforsyningData:
         """Fetch and parse meter data for the routine poll window."""
-        # ceil(QUERY_LOOKBACK_HOURS / 24); preserves the previous 48h window.
-        poll_days = max(1, (QUERY_LOOKBACK_HOURS + 23) // 24)
-        result = await self.async_fetch_window(poll_days)
+        # Look back as far as setup does, so readings that a supplier
+        # publishes days late are still imported.
+        result = await self.async_fetch_window(SUPPLIER_LOOKUP_DAYS)
 
         if self._import_statistics:
             self.hass.async_create_background_task(
@@ -249,21 +252,25 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         An empty statistics stream gets the supplier's history instead, which
         includes the latest readings. Deciding this in the task that imports
         the latest readings means they can't be stored first, which would make
-        the history import skip everything older than them.
+        the history import skip everything older than them. After a failed
+        history import, later polls only import their own readings, so a
+        stream that can't be stored doesn't cost a 5-year request every poll.
 
         Statistics import must never break the coordinator update loop. If the
         recorder is unavailable or the call raises, log a warning and move on.
         """
-        try:
-            if await self.async_hydrate():
-                return
-        except Exception:  # noqa: BLE001 - the latest readings are still imported
-            _LOGGER.warning(
-                "Could not import the supplier history for meter %s; "
-                "importing the latest readings instead",
-                self._meter_number,
-                exc_info=True,
-            )
+        if not self._history_failed:
+            try:
+                if await self.async_hydrate():
+                    return
+            except Exception:  # noqa: BLE001 - the latest readings are still imported
+                self._history_failed = True
+                _LOGGER.warning(
+                    "Could not import the supplier history for meter %s; "
+                    "importing the latest readings instead",
+                    self._meter_number,
+                    exc_info=True,
+                )
         try:
             await self.async_import_readings(data)
         except Exception:  # noqa: BLE001 - intentional safety net
@@ -338,6 +345,20 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
 
         async with self._stats_lock:
             await self._do_import(data, force_full=force_full)
+            # The next import continues from the last stored sum, so it must
+            # not start before the recorder has written these rows.
+            await self._async_wait_for_recorder()
+
+    async def _async_wait_for_recorder(self) -> None:
+        try:
+            async with asyncio.timeout(_RECORDER_COMMIT_TIMEOUT_SECONDS):
+                await get_instance(self.hass).async_block_till_done()
+        except TimeoutError:
+            _LOGGER.debug(
+                "The recorder hasn't stored the statistics for meter %s within %d s",
+                self._meter_number,
+                _RECORDER_COMMIT_TIMEOUT_SECONDS,
+            )
 
     async def _do_import(
         self,

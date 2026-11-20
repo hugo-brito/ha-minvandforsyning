@@ -83,7 +83,7 @@
       "unknown": "Uventet fejl. Se Home Assistant-loggen for detaljer."
     },
     "create_entry": {
-      "share_supplier": "Din måler er tilføjet. Forsynings-ID {supplier_id} står ikke på forsyningslisten endnu. [Del det på GitHub]({issue_url}), så andre kan vælge det under opsætningen. Skriv din forsynings navn, men aldrig dit målernummer."
+      "share_supplier": "Din måler er tilføjet. Forsynings-ID {supplier_id} står ikke på forsyningslisten endnu. [Del det på GitHub]({issue_url}), så andre kan vælge det under opsætningen. Skriv navnet på din vandforsyning, men aldrig dit målernummer."
     }
   },
   "options": {
@@ -107,7 +107,7 @@
   "services": {
     "backfill_statistics": {
       "name": "Genimportér langtidsstatistik",
-      "description": "Genimporterer måleraflæsninger i langtidsstatistik med leverandørens rapporterede tidsstempler. Hvis 'Dage' er angivet, henter integrationen så mange dages friske data fra leverandøren (op til ca. 5 år). Hvis 'Dage' udelades, genimporteres kun de seneste cachede aflæsninger (op til 48 timer). Brug efter sletning af forkerte statistikker eller til at indlæse en lang historik efter geninstallation af integrationen.",
+      "description": "Genimporterer måleraflæsninger i langtidsstatistik med leverandørens rapporterede tidsstempler. Hvis 'Dage' er angivet, henter integrationen så mange dages friske data fra leverandøren (op til ca. 5 år). Hvis 'Dage' udelades, genimporteres kun de seneste cachede aflæsninger (cirka de seneste 7 dage). Brug efter sletning af forkerte statistikker eller til at indlæse en lang historik efter geninstallation af integrationen.",
       "fields": {
         "meter_number": {
           "name": "Målernummer",
@@ -115,7 +115,7 @@
         },
         "days": {
           "name": "Dage",
-          "description": "Antal dage af historik der hentes fra leverandøren (1-1825). Udelad for kun at genimportere de seneste cachede aflæsninger (op til 48 timer)."
+          "description": "Antal dage af historik der hentes fra leverandøren (1-1825). Udelad for kun at genimportere de seneste cachede aflæsninger (cirka de seneste 7 dage)."
         },
         "force_full": {
           "name": "Tving fuld import",

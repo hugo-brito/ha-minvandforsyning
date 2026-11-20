@@ -18,14 +18,14 @@ CONF_SCAN_INTERVAL = "scan_interval"
 MIN_SCAN_INTERVAL = 600    # 10 minutes in seconds
 MAX_SCAN_INTERVAL = 86400  # 24 hours in seconds
 DEFAULT_SCAN_INTERVAL = 3600  # 1 hour in seconds
-QUERY_LOOKBACK_HOURS = 48
 
 SUPPLIER_ID_SCAN_MIN = 1
 SUPPLIER_ID_SCAN_MAX = 500
 # Each opt-in supplier search checks at most this many IDs.
 SUPPLIER_ID_SCAN_BATCH_SIZE = 500
 SUPPLIER_SCAN_DELAY_SECONDS = 0.05
-# Some suppliers publish readings days late, so lookups use a recent window.
+# Some suppliers publish readings days late. Setup accepts a meter with a
+# reading from the last 7 days, and every poll asks for the same days.
 SUPPLIER_LOOKUP_DAYS = 7
 SUPPLIER_ISSUE_URL = "https://github.com/hugo-brito/ha-minvandforsyning/issues/new"
 SUPPLIER_ISSUE_TEMPLATE = "add_supplier.yml"

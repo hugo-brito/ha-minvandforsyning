@@ -226,8 +226,9 @@ class MinvandforsyningConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _async_validate_supplier(self, supplier_id: int) -> dict[str, str]:
         """Check that the supplier has recent readings for the meter."""
         try:
+            # Fail fast: a Retry-After of hours would leave the form waiting.
             reading = await self._get_client().async_get_latest_reading(
-                self._meter_number, supplier_id
+                self._meter_number, supplier_id, retry_rate_limited=False,
             )
         except Exception as err:  # noqa: BLE001 - mapped to a form error
             error = _error_key(err)
@@ -254,14 +255,13 @@ class MinvandforsyningConfigFlow(ConfigFlow, domain=DOMAIN):
             self._discovery_task = self.hass.async_create_task(
                 self._async_discover_supplier()
             )
+            # Show progress even if the search has already finished. Going
+            # straight to progress done makes Home Assistant hand the menu
+            # choice to the confirm step, which then adds the meter unasked.
+            return self._async_show_search_progress()
 
         if not self._discovery_task.done():
-            return self.async_show_progress(
-                step_id="discover_supplier",
-                progress_action="discover_supplier",
-                description_placeholders=self._scan_placeholders(),
-                progress_task=self._discovery_task,
-            )
+            return self._async_show_search_progress()
 
         task, self._discovery_task = self._discovery_task, None
         try:
@@ -280,6 +280,15 @@ class MinvandforsyningConfigFlow(ConfigFlow, domain=DOMAIN):
         self._supplier_id = supplier_id
         return self.async_show_progress_done(next_step_id="confirm")
 
+    @callback
+    def _async_show_search_progress(self) -> dict[str, Any]:
+        return self.async_show_progress(
+            step_id="discover_supplier",
+            progress_action="discover_supplier",
+            description_placeholders=self._scan_placeholders(),
+            progress_task=self._discovery_task,
+        )
+
     async def _async_discover_supplier(self) -> int | None:
         """Run the supplier search and fetch a preview reading for a match."""
         client = self._get_client()
@@ -293,7 +302,7 @@ class MinvandforsyningConfigFlow(ConfigFlow, domain=DOMAIN):
         if supplier_id is not None:
             try:
                 reading = await client.async_get_latest_reading(
-                    self._meter_number, supplier_id
+                    self._meter_number, supplier_id, retry_rate_limited=False,
                 )
             except Exception:  # noqa: BLE001 - the preview is informational
                 _LOGGER.debug("Could not fetch preview reading", exc_info=True)

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable, Generator
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from functools import partial
@@ -15,10 +17,12 @@ from aiohttp import ClientConnectionError
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
     get_last_statistics,
     get_metadata,
     statistics_during_period,
 )
+from homeassistant.components.recorder.tasks import RecorderTask
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
@@ -178,6 +182,7 @@ class _RecorderPatches:
             return func(*args, **kwargs)
 
         recorder.async_add_executor_job = AsyncMock(side_effect=_exec)
+        recorder.async_block_till_done = AsyncMock()
         self.get_instance.return_value = recorder
         return self
 
@@ -626,7 +631,7 @@ def _supplier_response(readings: list[tuple[datetime, str, str]]) -> bytes:
 
 
 def _supplier(history_error: Exception | None = None) -> Callable[..., bytes]:
-    """Answer like the supplier: the 48-hour poll only gets the newest readings."""
+    """Answer like the supplier: a routine poll only gets the newest readings."""
     # The fixture's two newest readings.
     latest = _supplier_response([
         (datetime(2026, 3, 30, 22), "103.046", "12"),
@@ -792,6 +797,139 @@ async def test_failed_history_request_keeps_the_newest_readings_until_backfill(
     sums = await _hourly_sums(hass)
     assert len(sums) == 168
     assert sums[-1] == pytest.approx(3.052)
+
+
+def _hourly_readings(start: datetime, hours: int) -> list[tuple[datetime, str, str]]:
+    """Hourly readings of 10 L each, as the supplier reports them."""
+    return [
+        (start + timedelta(hours=hour), f"{100 + (hour + 1) / 100:.3f}", "10")
+        for hour in range(hours)
+    ]
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_polls_import_readings_that_the_supplier_publishes_days_late(
+    hass: HomeAssistant, supplier_api: MagicMock, entity_registry: er.EntityRegistry,
+) -> None:
+    """Setup accepts a meter whose newest reading is days old, so polls must too."""
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    readings = _hourly_readings(now - timedelta(days=20), 20 * 24)
+    published_until = now - timedelta(days=4)
+
+    def respond(meter_number, supplier_id, date_from, date_to, **kwargs):
+        # The API returns the published readings between the two dates.
+        return _supplier_response([
+            reading
+            for reading in readings
+            if date_from.date() <= reading[0].date() < date_to.date()
+            and reading[0] <= published_until
+        ])
+
+    supplier_api.async_get_meter_data.side_effect = respond
+    entry = await _set_up_meter(hass)
+    stored = len(await _hourly_sums(hass))
+
+    # The supplier publishes another day of readings.
+    published_until = now - timedelta(days=3)
+    await hass.data[DOMAIN][entry.entry_id].async_refresh()
+    await _wait_for_statistics(hass)
+
+    assert len(await _hourly_sums(hass)) == stored + 24
+    total = entity_registry.async_get_entity_id("sensor", DOMAIN, f"{_DEFAULT_METER}_total")
+    newest = next(reading for reading in reversed(readings) if reading[0] <= published_until)
+    assert float(hass.states.get(total).state) == pytest.approx(float(newest[1]))
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_history_is_not_requested_every_poll_when_it_cannot_be_stored(
+    hass: HomeAssistant, supplier_api: MagicMock,
+) -> None:
+    # Statistic IDs only allow lowercase letters, digits and underscores, so
+    # the recorder rejects every import for this meter.
+    meter = "AB-12345"
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=meter,
+        data={"meter_number": meter, "supplier_id": 1},
+        options={"import_statistics": True},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await _wait_for_statistics(hass)
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    for _ in range(3):
+        await coordinator.async_refresh()
+        await _wait_for_statistics(hass)
+
+    history_requests = [
+        call
+        for call in supplier_api.async_get_meter_data.await_args_list
+        if (call.args[3] - call.args[2]).days > 30
+    ]
+    assert len(history_requests) == 1
+
+
+@dataclass(slots=True)
+class _BusyRecorderTask(RecorderTask):
+    """Keep the recorder busy until released, like a long write."""
+
+    started: threading.Event
+    release: threading.Event
+
+    def run(self, instance: Any) -> None:
+        self.started.set()
+        self.release.wait(30)
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_poll_during_a_backfill_continues_from_the_backfilled_sum(
+    hass: HomeAssistant, supplier_api: MagicMock,
+) -> None:
+    """An import must be stored before the next import reads where to continue."""
+    # A first install whose history request failed: two rows, counted from zero.
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+    history = await coordinator.async_fetch_window(1825)
+    next_hour = MinvandforsyningData([_reading(2026, 3, 31, 0, "103.059", "7")])
+
+    queued = asyncio.Event()
+
+    def add_and_signal(*args: Any) -> None:
+        async_add_external_statistics(*args)
+        queued.set()
+
+    started, release = threading.Event(), threading.Event()
+    get_instance(hass).queue_task(_BusyRecorderTask(started, release))
+    await hass.async_add_executor_job(started.wait, 10)
+    try:
+        with patch(
+            "custom_components.minvandforsyning.coordinator.async_add_external_statistics",
+            side_effect=add_and_signal,
+        ):
+            backfill = hass.async_create_task(
+                coordinator.async_import_readings(history, force_full=True),
+            )
+            await queued.wait()
+            for _ in range(5):
+                await asyncio.sleep(0)
+            # The recorder hasn't stored the backfill yet, so a poll that ran
+            # now would continue from the sum stored before it.
+            assert not backfill.done()
+
+            poll = hass.async_create_task(coordinator.async_import_readings(next_hour))
+            release.set()
+            await asyncio.gather(backfill, poll)
+    finally:
+        release.set()
+    await async_wait_recording_done(hass)
+
+    sums = await _hourly_sums(hass)
+    assert len(sums) == 169
+    assert sums[-2:] == pytest.approx([3.052, 3.059])
 
 
 # ---------------------------------------------------------------------------

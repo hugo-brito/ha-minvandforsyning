@@ -107,7 +107,7 @@
   "services": {
     "backfill_statistics": {
       "name": "Backfill long-term statistics",
-      "description": "Re-imports meter readings into long-term statistics at the supplier's reported timestamps. When 'days' is set, the integration fetches that many days of fresh data from the supplier (up to ~5 years). When 'days' is omitted, it replays the most recently cached readings (up to 48 hours). Use after deleting bad statistics, or to bootstrap a long history after the integration was reinstalled.",
+      "description": "Re-imports meter readings into long-term statistics at the supplier's reported timestamps. When 'days' is set, the integration fetches that many days of fresh data from the supplier (up to ~5 years). When 'days' is omitted, it replays the most recently cached readings (about the last 7 days). Use after deleting bad statistics, or to bootstrap a long history after the integration was reinstalled.",
       "fields": {
         "meter_number": {
           "name": "Meter number",
@@ -115,7 +115,7 @@
         },
         "days": {
           "name": "Days",
-          "description": "Number of days of history to fetch from the supplier (1-1825). Omit to replay only the most recent cached readings (up to 48 h)."
+          "description": "Number of days of history to fetch from the supplier (1-1825). Omit to replay only the most recent cached readings (about the last 7 days)."
         },
         "force_full": {
           "name": "Force full",

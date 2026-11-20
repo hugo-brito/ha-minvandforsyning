@@ -27,6 +27,8 @@ jobs:
   tests:
     name: Tests
     runs-on: ubuntu-latest
+    # A test that hangs would otherwise hold the runner for 6 hours.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

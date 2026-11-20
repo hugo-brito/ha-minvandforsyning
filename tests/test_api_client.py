@@ -648,7 +648,14 @@ class TestSupplierDiscovery:
         assert [call.kwargs["params"]["SupplierID"] for call in calls] == ["1", "1"]
         assert calls[1].kwargs["headers"]["Authorization"] == "Bearer fresh_auth"
 
-    @pytest.mark.parametrize("body", [b"\x80", b"\x0b\x0c" * 7])
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(b"\x80", id="unreadable"),
+            pytest.param(b"\x0b\x0c" * 6, id="too_few_tables"),
+            pytest.param(b"\x0b\x0c" * 7, id="no_reading_columns"),
+        ],
+    )
     @pytest.mark.asyncio
     async def test_invalid_payload_stops_discovery(self, client, mock_session, body):
         mock_session.get.return_value = _make_response(body=body)

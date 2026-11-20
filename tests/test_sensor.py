@@ -137,10 +137,13 @@ async def test_meter_device_shows_its_supplier(
     assert device.entry_type is dr.DeviceEntryType.SERVICE
 
     entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, "12345_supplier_id")
+    assert entity_id == "sensor.water_meter_12345_supplier_id"
     entity = entity_registry.async_get(entity_id)
     assert entity.device_id == device.id
     assert entity.entity_category is EntityCategory.DIAGNOSTIC
-    assert hass.states.get(entity_id).state == str(supplier_id)
+    state = hass.states.get(entity_id)
+    assert state.name == "Water Meter 12345 Supplier ID"
+    assert state.state == str(supplier_id)
 
 
 class TestSensorAvailability:
