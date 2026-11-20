@@ -5,8 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
+from pytest_homeassistant.common import MockConfigEntry
 
-from custom_components.minvandforsyning.const import READING_DATE_TZ
+from custom_components.minvandforsyning.const import DOMAIN, READING_DATE_TZ
 from custom_components.minvandforsyning.coordinator import MeterReading, MinvandforsyningCoordinator, MinvandforsyningData
 
 
@@ -143,7 +144,8 @@ class TestCoordinatorDateRange:
         client.async_get_meter_data = AsyncMock(side_effect=capture_meter_data)
 
         coordinator = MinvandforsyningCoordinator(
-            hass, client, "99999999", 1,
+            hass, MockConfigEntry(domain=DOMAIN), client,
+            meter_number="99999999", supplier_id=1,
             import_statistics=False,
         )
 
@@ -162,3 +164,14 @@ class TestCoordinatorDateRange:
             f"DateTo ({date_to.date()}) must be after today ({frozen_now.date()}) "
             "because the API treats DateTo as exclusive"
         )
+
+
+def test_coordinator_belongs_to_its_config_entry():
+    """Home Assistant uses the entry to stop polling when the entry unloads."""
+    entry = MockConfigEntry(domain=DOMAIN)
+
+    coordinator = MinvandforsyningCoordinator(
+        MagicMock(), entry, MagicMock(), meter_number="99999999", supplier_id=1,
+    )
+
+    assert coordinator.config_entry is entry

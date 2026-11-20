@@ -14,13 +14,15 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfVolume
+from homeassistant.const import EntityCategory, UnitOfVolume
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import MinvandforsyningCoordinator, MinvandforsyningData
+from .suppliers import KNOWN_SUPPLIERS
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -86,10 +88,38 @@ async def async_setup_entry(
 ) -> None:
     """Set up MinVandforsyning sensors from a config entry."""
     coordinator: MinvandforsyningCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
+    entities: list[SensorEntity] = [
         MinvandforsyningSensor(coordinator, description, entry)
         for description in SENSOR_DESCRIPTIONS
+    ]
+    entities.append(MinvandforsyningSupplierSensor(entry))
+    async_add_entities(entities)
+
+
+def _device_info(entry: ConfigEntry) -> DeviceInfo:
+    """Describe the meter, with a listed water supplier as its model."""
+    meter_number = entry.data["meter_number"]
+    return DeviceInfo(
+        identifiers={(DOMAIN, meter_number)},
+        name=f"Water Meter {meter_number}",
+        manufacturer="Rambøll",
+        model=KNOWN_SUPPLIERS.get(entry.data["supplier_id"], "MinVandforsyning"),
+        entry_type=DeviceEntryType.SERVICE,
     )
+
+
+class MinvandforsyningSupplierSensor(SensorEntity):
+    """Diagnostic sensor with the supplier ID used to read the meter."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "supplier_id"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_should_poll = False
+
+    def __init__(self, entry: ConfigEntry) -> None:
+        self._attr_unique_id = f"{entry.data['meter_number']}_supplier_id"
+        self._attr_native_value = entry.data["supplier_id"]
+        self._attr_device_info = _device_info(entry)
 
 
 class MinvandforsyningSensor(
@@ -109,13 +139,7 @@ class MinvandforsyningSensor(
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.data['meter_number']}_{description.key}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.data["meter_number"])},
-            "name": f"Water Meter {entry.data['meter_number']}",
-            "manufacturer": "Rambøll",
-            "model": "MinVandforsyning",
-            "entry_type": "service",
-        }
+        self._attr_device_info = _device_info(entry)
 
     @property
     def native_value(self) -> Decimal | None:

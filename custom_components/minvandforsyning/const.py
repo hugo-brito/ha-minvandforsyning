@@ -22,7 +22,13 @@ QUERY_LOOKBACK_HOURS = 48
 
 SUPPLIER_ID_SCAN_MIN = 1
 SUPPLIER_ID_SCAN_MAX = 500
-SUPPLIER_DISCOVERY_THRESHOLD_BYTES = 910  # empty schema ~903 bytes
+# Each opt-in supplier search checks at most this many IDs.
+SUPPLIER_ID_SCAN_BATCH_SIZE = 500
+SUPPLIER_SCAN_DELAY_SECONDS = 0.05
+# Some suppliers publish readings days late, so lookups use a recent window.
+SUPPLIER_LOOKUP_DAYS = 7
+SUPPLIER_ISSUE_URL = "https://github.com/hugo-brito/ha-minvandforsyning/issues/new"
+SUPPLIER_ISSUE_TEMPLATE = "add_supplier.yml"
 
 # Retry policy for transient API failures (5xx, 429, network errors, timeouts).
 # Bounded so we never monopolize the coordinator's update window.

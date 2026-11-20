@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import (
     StatisticData,
+    StatisticMeanType,
     StatisticMetaData,
 )
 from homeassistant.components.recorder.statistics import (
@@ -19,6 +20,7 @@ from homeassistant.components.recorder.statistics import (
     get_last_statistics,
     statistics_during_period,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -39,17 +41,6 @@ from .const import (
     STATISTIC_ID_FORMAT,
 )
 from .protobuf_parser import parse_dataset
-
-# StatisticMeanType / unit_class were introduced after HA 2024.10. Older HA
-# releases still rely on the legacy ``has_mean`` boolean. We feature-detect to
-# stay compatible across the supported HA range (the production install in
-# the wild may be on either side of the transition).
-try:
-    from homeassistant.components.recorder.models import StatisticMeanType
-    _HAS_STATISTIC_MEAN_TYPE = True
-except ImportError:  # pragma: no cover - HA < 2024.11
-    StatisticMeanType = None  # type: ignore[assignment]
-    _HAS_STATISTIC_MEAN_TYPE = False
 
 _LOGGER = logging.getLogger(__name__)
 _READING_DATE_ZONE = ZoneInfo(READING_DATE_TZ)
@@ -131,6 +122,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
     def __init__(
         self,
         hass: HomeAssistant,
+        config_entry: ConfigEntry,
         client: MinvandforsyningClient,
         meter_number: str,
         supplier_id: int,
@@ -140,6 +132,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=config_entry,
             name=DOMAIN,
             update_interval=timedelta(seconds=scan_interval),
         )
@@ -251,11 +244,26 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         return start
 
     async def _safe_import_readings(self, data: MinvandforsyningData) -> None:
-        """Run ``async_import_readings`` swallowing any failure.
+        """Import readings into long-term statistics, never raising.
+
+        An empty statistics stream gets the supplier's history instead, which
+        includes the latest readings. Deciding this in the task that imports
+        the latest readings means they can't be stored first, which would make
+        the history import skip everything older than them.
 
         Statistics import must never break the coordinator update loop. If the
         recorder is unavailable or the call raises, log a warning and move on.
         """
+        try:
+            if await self.async_hydrate():
+                return
+        except Exception:  # noqa: BLE001 - the latest readings are still imported
+            _LOGGER.warning(
+                "Could not import the supplier history for meter %s; "
+                "importing the latest readings instead",
+                self._meter_number,
+                exc_info=True,
+            )
         try:
             await self.async_import_readings(data)
         except Exception:  # noqa: BLE001 - intentional safety net
@@ -265,19 +273,19 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 exc_info=True,
             )
 
-    async def async_hydrate(self, days: int = INITIAL_HYDRATE_DAYS) -> None:
-        """One-shot import of multi-year supplier history into LTS.
+    async def async_hydrate(self, days: int = INITIAL_HYDRATE_DAYS) -> bool:
+        """Import multi-year supplier history into an empty LTS stream.
 
         Idempotent: if the external statistic stream already contains any data,
-        this is a no-op. Safe to call repeatedly. Designed for first-install
-        bootstrap when the recorder has no rows for our statistic_id yet.
+        this is a no-op. Safe to call repeatedly. Returns True if it imported
+        history.
         """
         if not self._import_statistics:
             _LOGGER.debug(
                 "Stats import disabled; skipping hydrate for meter %s",
                 self._meter_number,
             )
-            return
+            return False
         # Idempotency: skip if the LTS stream already has anything.
         last_stats = await get_instance(self.hass).async_add_executor_job(
             get_last_statistics, self.hass, 1, self.statistic_id, True, {"sum"},
@@ -287,7 +295,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 "LTS stream %s already populated; skipping hydrate",
                 self.statistic_id,
             )
-            return
+            return False
         _LOGGER.info(
             "Hydrating LTS stream %s with up to %d days of supplier history",
             self.statistic_id,
@@ -299,7 +307,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 "Hydrate fetched 0 readings for meter %s; nothing imported",
                 self._meter_number,
             )
-            return
+            return False
         # async_import_readings's cutoff lookup will see the empty LTS we just
         # checked, so sum_so_far starts at 0 and every reading gets imported.
         await self.async_import_readings(data)
@@ -310,17 +318,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             data.readings[0].date,
             data.readings[-1].date,
         )
-
-    async def _safe_hydrate(self, days: int = INITIAL_HYDRATE_DAYS) -> None:
-        """Run :meth:`async_hydrate` swallowing any failure. Opportunistic."""
-        try:
-            await self.async_hydrate(days)
-        except Exception:  # noqa: BLE001 - hydrate must never break setup
-            _LOGGER.warning(
-                "Initial hydrate failed for meter %s; routine polls will continue",
-                self._meter_number,
-                exc_info=True,
-            )
+        return True
 
     async def async_import_readings(
         self,
@@ -403,20 +401,14 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             return
 
         metadata: StatisticMetaData = {
-            # has_mean kept for HA < 2025.11 (recorder still reads this key);
-            # newer releases also honour mean_type below.
-            "has_mean": False,
             "has_sum": True,
+            "mean_type": StatisticMeanType.NONE,
             "name": f"Water Meter {self._meter_number} Total Consumption",
             "source": DOMAIN,
             "statistic_id": statistic_id,
+            "unit_class": "volume",
             "unit_of_measurement": str(UnitOfVolume.CUBIC_METERS),
         }
-        if _HAS_STATISTIC_MEAN_TYPE:
-            metadata["mean_type"] = StatisticMeanType.NONE  # type: ignore[typeddict-unknown-key]
-        # unit_class is a HA 2025.11+ hint; harmless on older releases that
-        # ignore unknown keys, useful on newer ones for unit-conversion picker.
-        metadata["unit_class"] = "volume"  # type: ignore[typeddict-unknown-key]
 
         async_add_external_statistics(self.hass, metadata, statistics)
         _LOGGER.debug(

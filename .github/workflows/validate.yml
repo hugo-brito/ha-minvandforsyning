@@ -31,6 +31,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: pip install pytest pytest-asyncio aiohttp homeassistant
+          python-version: "3.14"
+      # Test the minimum Home Assistant version from hacs.json. The official
+      # test package has the same version as Home Assistant and pins pytest.
+      - run: pip install "pytest-homeassistant==2026.11.0"
       - run: pytest tests/ -v

@@ -10,10 +10,12 @@ from unittest.mock import MagicMock
 
 import pytest
 import voluptuous as vol
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.minvandforsyning.const import (
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
 )
@@ -33,7 +35,7 @@ class TestCoordinatorScanInterval:
         hass = MagicMock()
         client = MagicMock()
         coord = MinvandforsyningCoordinator(
-            hass, client, meter_number="123", supplier_id=1,
+            hass, MockConfigEntry(domain=DOMAIN), client, meter_number="123", supplier_id=1,
         )
         assert coord.update_interval == timedelta(seconds=DEFAULT_SCAN_INTERVAL)
 
@@ -44,7 +46,7 @@ class TestCoordinatorScanInterval:
         hass = MagicMock()
         client = MagicMock()
         coord = MinvandforsyningCoordinator(
-            hass, client, meter_number="123", supplier_id=1,
+            hass, MockConfigEntry(domain=DOMAIN), client, meter_number="123", supplier_id=1,
             scan_interval=1800,
         )
         assert coord.update_interval == timedelta(seconds=1800)
@@ -56,7 +58,7 @@ class TestCoordinatorScanInterval:
         hass = MagicMock()
         client = MagicMock()
         coord = MinvandforsyningCoordinator(
-            hass, client, meter_number="123", supplier_id=1,
+            hass, MockConfigEntry(domain=DOMAIN), client, meter_number="123", supplier_id=1,
             scan_interval=DEFAULT_SCAN_INTERVAL,
         )
         assert coord.update_interval == timedelta(seconds=DEFAULT_SCAN_INTERVAL)

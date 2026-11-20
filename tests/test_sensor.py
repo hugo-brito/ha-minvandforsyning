@@ -1,16 +1,26 @@
 """Tests for MinVandforsyning sensor definitions."""
 from datetime import datetime
 from decimal import Decimal
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+import pytest
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
-from homeassistant.const import UnitOfVolume
+from homeassistant.const import EntityCategory, UnitOfVolume
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant.common import MockConfigEntry
 
+from custom_components.minvandforsyning.const import DOMAIN
 from custom_components.minvandforsyning.coordinator import MeterReading, MinvandforsyningData
 from custom_components.minvandforsyning.sensor import (
     MinvandforsyningSensor,
     SENSOR_DESCRIPTIONS,
 )
+from custom_components.minvandforsyning.suppliers import KNOWN_SUPPLIERS
+
+FIXTURE = Path(__file__).parent / "fixtures" / "meter_data.bin"
 
 
 def _desc(key: str):
@@ -91,6 +101,48 @@ class TestUnitContract:
         assert actual == self.EXPECTED
 
 
+@pytest.mark.usefixtures("recorder_mock")
+@pytest.mark.parametrize(
+    ("supplier_id", "model"),
+    [
+        pytest.param(42, "Example Vandværk", id="listed"),
+        pytest.param(612, "MinVandforsyning", id="not_listed"),
+    ],
+)
+async def test_meter_device_shows_its_supplier(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    supplier_id: int,
+    model: str,
+) -> None:
+    """The supplier is shown on the meter's own device, not as a second device."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="12345",
+        data={"meter_number": "12345", "supplier_id": supplier_id},
+        options={"import_statistics": False},
+    )
+    entry.add_to_hass(hass)
+    with patch.dict(KNOWN_SUPPLIERS, {42: "Example Vandværk"}, clear=True), patch(
+        "custom_components.minvandforsyning.MinvandforsyningClient", autospec=True,
+    ) as client_cls:
+        client_cls.return_value.async_get_meter_data.return_value = FIXTURE.read_bytes()
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    [device] = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    assert device.identifiers == {(DOMAIN, "12345")}
+    assert (device.manufacturer, device.model) == ("Rambøll", model)
+    assert device.entry_type is dr.DeviceEntryType.SERVICE
+
+    entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, "12345_supplier_id")
+    entity = entity_registry.async_get(entity_id)
+    assert entity.device_id == device.id
+    assert entity.entity_category is EntityCategory.DIAGNOSTIC
+    assert hass.states.get(entity_id).state == str(supplier_id)
+
+
 class TestSensorAvailability:
     """Entity must report unavailable rather than None to keep LTS clean."""
 
@@ -100,7 +152,7 @@ class TestSensorAvailability:
         coordinator.last_update_success = True
         # CoordinatorEntity.available checks last_update_success
         entry = MagicMock()
-        entry.data = {"meter_number": "12345"}
+        entry.data = {"meter_number": "12345", "supplier_id": 15}
         return MinvandforsyningSensor(coordinator, _desc(key), entry)
 
     def _reading(self, total: str, consumption: str) -> MeterReading:
@@ -176,7 +228,7 @@ class TestExtraStateAttributes:
         coordinator.data = data
         coordinator.last_update_success = True
         entry = MagicMock()
-        entry.data = {"meter_number": "12345"}
+        entry.data = {"meter_number": "12345", "supplier_id": 15}
         return MinvandforsyningSensor(coordinator, _desc(key), entry)
 
     def _reading(self, total: str, consumption: str, date: datetime | None = None) -> MeterReading:

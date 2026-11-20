@@ -51,6 +51,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = MinvandforsyningCoordinator(
         hass,
+        entry,
         client,
         meter_number=entry.data["meter_number"],
         supplier_id=entry.data["supplier_id"],
@@ -64,16 +65,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # Hydrate LTS with supplier history on first install. Idempotent: skips
-    # if the stream is already populated, so re-installs and reload-after-
-    # options are free. Background task so setup never blocks on the
-    # multi-year fetch.
-    if import_statistics:
-        hass.async_create_background_task(
-            coordinator._safe_hydrate(),
-            name=f"{DOMAIN}_hydrate_{entry.data['meter_number']}",
-        )
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 

@@ -1,5 +1,7 @@
 """Tests for the MinVandforsyning API client."""
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -654,3 +656,44 @@ class TestSupplierDiscovery:
         with pytest.raises(ValueError):
             await client.async_discover_supplier_id("12345678")
         assert mock_session.get.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_latest_reading_uses_newest_row_in_recent_window(
+        self, client, mock_session,
+    ):
+        body = (Path(__file__).parent / "fixtures" / "meter_data.bin").read_bytes()
+        mock_session.get.return_value = _make_response(body=body)
+
+        assert await client.async_get_latest_reading("12345678", 7) == Decimal("103.052")
+
+        params = mock_session.get.call_args.kwargs["params"]
+        today = datetime.now(timezone.utc).date()
+        assert params["SupplierID"] == "7"
+        assert params["DateFrom"] == (today - timedelta(days=7)).isoformat()
+        assert params["DateTo"] == (today + timedelta(days=1)).isoformat()
+
+    @pytest.mark.asyncio
+    async def test_known_suppliers_are_tried_first_with_progress(
+        self, client, mock_session,
+    ):
+        populated = _discovery_payload(datetime.now(timezone.utc))
+        empty = _discovery_payload()
+        mock_session.get.side_effect = lambda url, *, params, headers: _make_response(
+            body=populated if params["SupplierID"] == "3" else empty
+        )
+        progress = []
+
+        result = await client.async_discover_supplier_id(
+            "12345678",
+            scan_start=1,
+            scan_end=3,
+            candidates=[700, 2],
+            on_progress=lambda checked, total: progress.append((checked, total)),
+        )
+
+        assert result == 3
+        assert [
+            call.kwargs["params"]["SupplierID"]
+            for call in mock_session.get.call_args_list
+        ] == ["700", "2", "1", "3"]
+        assert progress == [(1, 4), (2, 4), (3, 4), (4, 4)]

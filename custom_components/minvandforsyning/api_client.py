@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from aiohttp import ClientError, ClientResponseError, ClientSession
 
@@ -14,18 +16,31 @@ from .const import (
     API_TRANSIENT_STATUS_CODES,
     BROKER_API_URL,
     CLIENT_APPLICATION_APP,
+    COL_CONSUMPTION,
+    COL_READING,
+    COL_READING_DATE,
     CONTEXT_TOKEN_HEADER,
     METHOD_NAME,
     METER_DATA_PATH,
-    SUPPLIER_DISCOVERY_THRESHOLD_BYTES,
+    READINGS_TABLE_INDEX,
+    SUPPLIER_ID_SCAN_BATCH_SIZE,
     SUPPLIER_ID_SCAN_MAX,
     SUPPLIER_ID_SCAN_MIN,
+    SUPPLIER_LOOKUP_DAYS,
+    SUPPLIER_SCAN_DELAY_SECONDS,
     TARGET_API,
     TOKEN_GENERATOR_URL,
     TOKEN_PATH,
 )
+from .protobuf_parser import parse_dataset
 
 _LOGGER = logging.getLogger(__name__)
+
+_READING_COLUMNS = frozenset({COL_READING_DATE, COL_READING, COL_CONSUMPTION})
+
+
+class InvalidResponseError(ValueError):
+    """Raised when the API returns data that is not readable meter data."""
 
 
 class AuthTokens:
@@ -88,12 +103,15 @@ class MinvandforsyningClient:
         supplier_id: int,
         date_from: datetime,
         date_to: datetime,
+        *,
+        retry_rate_limited: bool = True,
     ) -> bytes:
         """Fetch raw meter data (protobuf-net-data binary).
 
         Retries on transient failures (5xx, 429, network errors, timeouts) with
         bounded exponential backoff. A single 401 response triggers a token
-        refresh and counts as one attempt.
+        refresh and counts as one attempt. With ``retry_rate_limited=False``,
+        HTTP 429 is raised immediately.
         """
         tokens = await self.async_get_tokens()
 
@@ -124,6 +142,7 @@ class MinvandforsyningClient:
                     if (
                         resp.status in API_TRANSIENT_STATUS_CODES
                         and attempt < API_MAX_ATTEMPTS - 1
+                        and (retry_rate_limited or resp.status != 429)
                     ):
                         delay = API_BACKOFF_BASE_SECONDS * (2 ** attempt)
                         if resp.status == 429:
@@ -160,56 +179,82 @@ class MinvandforsyningClient:
         # Kept as a defensive guard in case the control flow is changed later.
         raise RuntimeError("async_get_meter_data: retries exhausted without response")
 
-    async def async_discover_supplier_id(self, meter_number: str) -> int | None:
-        """Scan supplier IDs to find which one has data for the given meter.
+    async def async_get_latest_reading(
+        self,
+        meter_number: str,
+        supplier_id: int,
+        *,
+        retry_rate_limited: bool = True,
+    ) -> Decimal | None:
+        """Return the newest recent meter reading, or None if there is none.
 
-        Returns the supplier ID, or None if no match found.
+        Raises InvalidResponseError when the response cannot be parsed or lacks
+        the readings table.
         """
-        tokens = await self.async_get_tokens()
-        url = f"{BROKER_API_URL}{METER_DATA_PATH}"
+        now = datetime.now(timezone.utc)
+        raw = await self.async_get_meter_data(
+            meter_number,
+            supplier_id,
+            now - timedelta(days=SUPPLIER_LOOKUP_DAYS),
+            # DateTo is exclusive, so tomorrow includes today's readings.
+            now + timedelta(days=1),
+            retry_rate_limited=retry_rate_limited,
+        )
 
-        # Use a short date range for discovery (just today)
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        try:
+            tables = parse_dataset(raw)
+        except Exception as err:  # noqa: BLE001 - malformed input fails in several ways
+            raise InvalidResponseError("Could not parse the meter data response") from err
 
-        headers = {
-            "Authorization": f"Bearer {tokens.easy_auth_token}",
-            CONTEXT_TOKEN_HEADER: tokens.context_token,
-        }
+        if len(tables) <= READINGS_TABLE_INDEX:
+            raise InvalidResponseError(
+                f"Response has {len(tables)} tables, expected at least {READINGS_TABLE_INDEX + 1}"
+            )
+        readings = tables[READINGS_TABLE_INDEX]
+        if not _READING_COLUMNS.issubset(column.name for column in readings.columns):
+            raise InvalidResponseError("Response is missing the meter reading columns")
 
-        for supplier_id in range(SUPPLIER_ID_SCAN_MIN, SUPPLIER_ID_SCAN_MAX + 1):
-            params = {
-                "MeterNumber": meter_number,
-                "SupplierID": str(supplier_id),
-                "DateFrom": yesterday,
-                "DateTo": today,
-            }
-            try:
-                async with self._session.get(url, params=params, headers=headers) as resp:
-                    if resp.status == 429:
-                        _LOGGER.warning("Rate limited during supplier scan, stopping")
-                        return None
-                    if resp.status != 200:
-                        continue
-                    data = await resp.read()
-                    if len(data) > SUPPLIER_DISCOVERY_THRESHOLD_BYTES:
-                        _LOGGER.info(
-                            "Found supplier ID %d for meter %s (%d bytes)",
-                            supplier_id, meter_number, len(data),
-                        )
-                        return supplier_id
-            except Exception:  # noqa: BLE001
-                _LOGGER.debug("Supplier %d: request failed, skipping", supplier_id)
-                continue
+        for row in reversed(readings.rows):
+            if all(row.get(column) is not None for column in _READING_COLUMNS):
+                return row[COL_READING]
+        return None
 
-            await asyncio.sleep(0.05)
+    async def async_discover_supplier_id(
+        self,
+        meter_number: str,
+        *,
+        scan_start: int = SUPPLIER_ID_SCAN_MIN,
+        scan_end: int = SUPPLIER_ID_SCAN_MAX,
+        candidates: Iterable[int] = (),
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> int | None:
+        """Find the supplier ID with recent readings for the given meter.
 
-            # Refresh tokens if needed mid-scan
-            if self._tokens is not None and self._tokens.expired:
-                tokens = await self.async_get_tokens()
-                headers = {
-                    "Authorization": f"Bearer {tokens.easy_auth_token}",
-                    CONTEXT_TOKEN_HEADER: tokens.context_token,
-                }
+        Tries ``candidates`` first, then ``scan_start`` to ``scan_end``
+        inclusive. Returns None if no supplier has readings. HTTP errors
+        propagate, and HTTP 429 stops the search without retrying.
+        """
+        if (
+            scan_start < 1
+            or scan_end < scan_start
+            or scan_end - scan_start + 1 > SUPPLIER_ID_SCAN_BATCH_SIZE
+        ):
+            raise ValueError(
+                f"Invalid supplier ID range {scan_start}-{scan_end}: expected 1 to "
+                f"{SUPPLIER_ID_SCAN_BATCH_SIZE} IDs starting at 1 or higher"
+            )
+
+        supplier_ids = list(dict.fromkeys([*candidates, *range(scan_start, scan_end + 1)]))
+        for checked, supplier_id in enumerate(supplier_ids, start=1):
+            if checked > 1:
+                await asyncio.sleep(SUPPLIER_SCAN_DELAY_SECONDS)
+            reading = await self.async_get_latest_reading(
+                meter_number, supplier_id, retry_rate_limited=False,
+            )
+            if on_progress is not None:
+                on_progress(checked, len(supplier_ids))
+            if reading is not None:
+                _LOGGER.info("Found supplier ID %d for meter %s", supplier_id, meter_number)
+                return supplier_id
 
         return None
