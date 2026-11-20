@@ -686,6 +686,7 @@ async def test_setup_stores_readings_in_the_recorder(
     )
     # Home Assistant logs this when an integration uses a deprecated API.
     assert "Detected that custom integration" not in caplog.text
+    assert "Not importing the statistics stream" not in caplog.text
 
 
 @pytest.mark.usefixtures("recorder_mock")
@@ -808,9 +809,13 @@ async def test_polls_import_readings_that_the_supplier_publishes_days_late(
     assert float(hass.states.get(total).state) == pytest.approx(float(newest[1]))
 
 
+@pytest.mark.parametrize("import_statistics", [True, False])
 @pytest.mark.usefixtures("recorder_mock")
 async def test_a_meter_number_that_cannot_be_a_statistic_id_skips_statistics(
-    hass: HomeAssistant, supplier_api: MagicMock, caplog: pytest.LogCaptureFixture,
+    hass: HomeAssistant,
+    supplier_api: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    import_statistics: bool,
 ) -> None:
     """The recorder would reject every import, so none is tried."""
     # Statistic IDs only allow lowercase letters, digits and underscores.
@@ -820,7 +825,7 @@ async def test_a_meter_number_that_cannot_be_a_statistic_id_skips_statistics(
         domain=DOMAIN,
         unique_id=meter,
         data={"meter_number": meter, "supplier_id": 1},
-        options={"import_statistics": True},
+        options={"import_statistics": import_statistics},
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -837,7 +842,10 @@ async def test_a_meter_number_that_cannot_be_a_statistic_id_skips_statistics(
         if (call.args[3] - call.args[2]).days > 30
     ]
     assert history_requests == []
-    assert caplog.text.count(f"Can't store long-term statistics for meter {meter}") == 1
+    assert "Failed to import long-term statistics" not in caplog.text
+    stream = f"{DOMAIN}:water_meter_{meter}_total"
+    expected_warnings = 1 if import_statistics else 0
+    assert caplog.text.count(f"Not importing the statistics stream {stream}") == expected_warnings
 
 
 @pytest.mark.usefixtures("recorder_mock")
@@ -892,9 +900,9 @@ async def test_a_poll_during_a_backfill_continues_from_the_backfilled_sum(
         queued.set()
 
     started, release = threading.Event(), threading.Event()
-    get_instance(hass).queue_task(_BusyRecorderTask(started, release))
-    assert await hass.async_add_executor_job(started.wait, 10)
     try:
+        get_instance(hass).queue_task(_BusyRecorderTask(started, release))
+        assert await hass.async_add_executor_job(started.wait, 10)
         with patch(
             "custom_components.minvandforsyning.coordinator.async_add_external_statistics",
             side_effect=add_and_signal,
@@ -931,11 +939,12 @@ async def test_an_import_with_nothing_new_does_not_wait_for_the_recorder(
     stored = coordinator.data
 
     started, release = threading.Event(), threading.Event()
-    get_instance(hass).queue_task(_BusyRecorderTask(started, release))
-    assert await hass.async_add_executor_job(started.wait, 10)
-    # Unrelated work waits behind the busy task, as it would on a live system.
-    get_instance(hass).queue_task(_BusyRecorderTask(threading.Event(), release))
     try:
+        get_instance(hass).queue_task(_BusyRecorderTask(started, release))
+        assert await hass.async_add_executor_job(started.wait, 10)
+        # The recorder only makes callers wait while work is queued, so queue
+        # some behind the busy task, as on a live system.
+        get_instance(hass).queue_task(_BusyRecorderTask(threading.Event(), release))
         # Every reading is stored already, so there's nothing to wait for.
         async with asyncio.timeout(10):
             await coordinator.async_import_readings(stored)

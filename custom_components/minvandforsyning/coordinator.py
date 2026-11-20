@@ -150,8 +150,9 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         self._can_store_statistics = valid_statistic_id(self.statistic_id)
         if import_statistics and not self._can_store_statistics:
             _LOGGER.warning(
-                "Can't store long-term statistics for meter %s: a statistic ID "
-                "may only contain lowercase letters, digits and underscores",
+                "Not importing the statistics stream %s for meter %s: a statistic "
+                "ID may only contain lowercase letters, digits and underscores",
+                self.statistic_id,
                 meter_number,
             )
 

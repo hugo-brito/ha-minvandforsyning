@@ -12,7 +12,7 @@ from custom_components.minvandforsyning.api_client import (
     MinvandforsyningClient,
 )
 
-from .payloads import varint
+from .payloads import supplier_response
 
 
 def _make_response(*, status=200, body=b""):
@@ -31,22 +31,10 @@ def _make_response(*, status=200, body=b""):
 
 
 def _discovery_payload(reading_date=None, *, padding=0):
-    """Build a synthetic DataSet with an optional zero-valued meter reading."""
-    columns = [("ReadingDate", 2), ("Reading", 12), ("Consumption", 12)]
-    if padding:
-        columns.append(("Padding" + "x" * padding, 1))
-
-    data = b"\x0b\x0c" * 6 + b"\x0b"
-    for name, proto_type in columns:
-        encoded_name = name.encode("ascii")
-        data += b"\x13\x0a" + varint(len(encoded_name)) + encoded_name
-        data += b"\x10" + varint(proto_type) + b"\x14"
-
-    if reading_date is not None:
-        seconds = int(reading_date.timestamp())
-        data += b"\x1b\x0b\x08" + varint(seconds * 2) + b"\x10\x03\x0c"
-        data += b"\x13\x08\x00\x14\x1b\x08\x00\x1c\x1c"
-    return data + b"\x0c"
+    """A supplier response with an optional zero-valued meter reading."""
+    readings = [] if reading_date is None else [(reading_date, "0", "0")]
+    extra = [("Padding" + "x" * padding, 1)] if padding else []
+    return supplier_response(readings, extra_columns=extra)
 
 
 class TestAuthTokens:
@@ -489,7 +477,10 @@ class TestTransientErrorRetry:
         assert [call.args[0] for call in no_sleep.call_args_list] == [30.0]
 
     @pytest.mark.parametrize(
-        "retry_after", ["Wed, 21 Oct 2026 07:28:00 GMT", "²"], ids=["http_date", "superscript"],
+        "retry_after",
+        # isdigit() accepts "²", but float() doesn't.
+        ["Wed, 21 Oct 2026 07:28:00 GMT", "²"],
+        ids=["http_date", "superscript"],
     )
     @pytest.mark.asyncio
     async def test_429_retry_after_non_numeric_falls_back_to_backoff(

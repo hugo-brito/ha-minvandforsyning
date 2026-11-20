@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -23,10 +24,14 @@ def _decimal(value: str) -> bytes:
     return encoded + (b"\x18" + varint(-exponent << 1) if exponent < 0 else b"")
 
 
-def supplier_response(readings: list[tuple[datetime, str, str]]) -> bytes:
+def supplier_response(
+    readings: list[tuple[datetime, str, str]],
+    extra_columns: Sequence[tuple[str, int]] = (),
+) -> bytes:
     """Encode readings like the supplier API, which puts them in its 7th table."""
     response = b"\x0b\x0c" * 6 + b"\x0b"
-    for name, data_type in (("ReadingDate", 2), ("Reading", 12), ("Consumption", 12)):
+    columns = [("ReadingDate", 2), ("Reading", 12), ("Consumption", 12), *extra_columns]
+    for name, data_type in columns:
         response += (
             b"\x13\x0a" + varint(len(name)) + name.encode()
             + b"\x10" + varint(data_type) + b"\x14"
