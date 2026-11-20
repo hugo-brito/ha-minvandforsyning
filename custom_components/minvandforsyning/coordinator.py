@@ -19,6 +19,7 @@ from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_last_statistics,
     statistics_during_period,
+    valid_statistic_id,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfVolume
@@ -37,8 +38,8 @@ from .const import (
     LITERS_PER_CUBIC_METER,
     READING_DATE_TZ,
     READINGS_TABLE_INDEX,
+    RECENT_READINGS_DAYS,
     STATISTIC_ID_FORMAT,
-    SUPPLIER_LOOKUP_DAYS,
 )
 from .protobuf_parser import parse_dataset
 
@@ -146,7 +147,13 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         # background import task triggered by a previous refresh can't race
         # the next refresh's import or a backfill service call.
         self._stats_lock = asyncio.Lock()
-        self._history_failed = False
+        self._can_store_statistics = valid_statistic_id(self.statistic_id)
+        if import_statistics and not self._can_store_statistics:
+            _LOGGER.warning(
+                "Can't store long-term statistics for meter %s: a statistic ID "
+                "may only contain lowercase letters, digits and underscores",
+                meter_number,
+            )
 
     @property
     def meter_number(self) -> str:
@@ -166,7 +173,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
     async def async_fetch_window(self, days: int) -> MinvandforsyningData:
         """Fetch and parse meter data for the last *days* days.
 
-        Shared by the recurring poll (called with ``SUPPLIER_LOOKUP_DAYS``)
+        Shared by the recurring poll (called with ``RECENT_READINGS_DAYS``)
         and by hydrate / backfill service (called with up to
         ``INITIAL_HYDRATE_DAYS``). Returns parsed :class:`MinvandforsyningData`;
         raises :class:`UpdateFailed` on failure.
@@ -213,9 +220,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
 
     async def _async_update_data(self) -> MinvandforsyningData:
         """Fetch and parse meter data for the routine poll window."""
-        # Look back as far as setup does, so readings that a supplier
-        # publishes days late are still imported.
-        result = await self.async_fetch_window(SUPPLIER_LOOKUP_DAYS)
+        result = await self.async_fetch_window(RECENT_READINGS_DAYS)
 
         if self._import_statistics:
             self.hass.async_create_background_task(
@@ -247,30 +252,24 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         return start
 
     async def _safe_import_readings(self, data: MinvandforsyningData) -> None:
-        """Import readings into long-term statistics, never raising.
+        """Import readings into long-term statistics, logging any failure.
 
-        An empty statistics stream gets the supplier's history instead, which
-        includes the latest readings. Deciding this in the task that imports
-        the latest readings means they can't be stored first, which would make
-        the history import skip everything older than them. After a failed
-        history import, later polls only import their own readings, so a
-        stream that can't be stored doesn't cost a 5-year request every poll.
-
-        Statistics import must never break the coordinator update loop. If the
-        recorder is unavailable or the call raises, log a warning and move on.
+        An empty stream gets the supplier's history instead, which includes
+        these readings. Storing these first would make the history import
+        skip everything older.
         """
-        if not self._history_failed:
-            try:
-                if await self.async_hydrate():
-                    return
-            except Exception:  # noqa: BLE001 - the latest readings are still imported
-                self._history_failed = True
-                _LOGGER.warning(
-                    "Could not import the supplier history for meter %s; "
-                    "importing the latest readings instead",
-                    self._meter_number,
-                    exc_info=True,
-                )
+        if not self._can_store_statistics:
+            return
+        try:
+            if await self.async_hydrate():
+                return
+        except Exception:  # noqa: BLE001 - the latest readings are still imported
+            _LOGGER.warning(
+                "Could not import the supplier history for meter %s; "
+                "importing the latest readings instead",
+                self._meter_number,
+                exc_info=True,
+            )
         try:
             await self.async_import_readings(data)
         except Exception:  # noqa: BLE001 - intentional safety net
@@ -344,10 +343,10 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             return
 
         async with self._stats_lock:
-            await self._do_import(data, force_full=force_full)
             # The next import continues from the last stored sum, so it must
             # not start before the recorder has written these rows.
-            await self._async_wait_for_recorder()
+            if await self._do_import(data, force_full=force_full):
+                await self._async_wait_for_recorder()
 
     async def _async_wait_for_recorder(self) -> None:
         try:
@@ -365,7 +364,8 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         data: MinvandforsyningData,
         *,
         force_full: bool,
-    ) -> None:
+    ) -> bool:
+        """Queue the readings' statistics; return whether there were any."""
         statistic_id = self.statistic_id
 
         cutoff_ts: float | None = None
@@ -419,7 +419,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             ))
 
         if not statistics:
-            return
+            return False
 
         metadata: StatisticMetaData = {
             "has_sum": True,
@@ -437,3 +437,4 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             len(statistics),
             statistic_id,
         )
+        return True

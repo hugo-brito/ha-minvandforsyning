@@ -1,6 +1,6 @@
 name: Add a water supplier
 description: Share a supplier ID that worked during setup, so others can choose it from the list.
-title: "Add supplier: "
+title: "Add supplier "
 labels: ["enhancement"]
 body:
   - type: markdown

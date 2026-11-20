@@ -13,6 +13,7 @@ from aiohttp import ClientError, ClientResponseError, ClientSession
 from .const import (
     API_BACKOFF_BASE_SECONDS,
     API_MAX_ATTEMPTS,
+    API_RETRY_AFTER_MAX_SECONDS,
     API_TRANSIENT_STATUS_CODES,
     BROKER_API_URL,
     CLIENT_APPLICATION_APP,
@@ -23,10 +24,10 @@ from .const import (
     METHOD_NAME,
     METER_DATA_PATH,
     READINGS_TABLE_INDEX,
+    RECENT_READINGS_DAYS,
     SUPPLIER_ID_SCAN_BATCH_SIZE,
     SUPPLIER_ID_SCAN_MAX,
     SUPPLIER_ID_SCAN_MIN,
-    SUPPLIER_LOOKUP_DAYS,
     SUPPLIER_SCAN_DELAY_SECONDS,
     TARGET_API,
     TOKEN_GENERATOR_URL,
@@ -146,10 +147,13 @@ class MinvandforsyningClient:
                     ):
                         delay = API_BACKOFF_BASE_SECONDS * (2 ** attempt)
                         if resp.status == 429:
-                            # Honor Retry-After when the server sets it.
+                            # Honor Retry-After when the server sets it, up to a limit.
                             retry_after = resp.headers.get("Retry-After", "")
-                            if retry_after.isdigit():
-                                delay = max(delay, float(retry_after))
+                            if retry_after.isdecimal():
+                                delay = max(
+                                    delay,
+                                    min(float(retry_after), API_RETRY_AFTER_MAX_SECONDS),
+                                )
                         _LOGGER.warning(
                             "HTTP %d from API, retrying in %.1fs (attempt %d/%d)",
                             resp.status, delay, attempt + 1, API_MAX_ATTEMPTS,
@@ -195,7 +199,7 @@ class MinvandforsyningClient:
         raw = await self.async_get_meter_data(
             meter_number,
             supplier_id,
-            now - timedelta(days=SUPPLIER_LOOKUP_DAYS),
+            now - timedelta(days=RECENT_READINGS_DAYS),
             # DateTo is exclusive, so tomorrow includes today's readings.
             now + timedelta(days=1),
             retry_rate_limited=retry_rate_limited,

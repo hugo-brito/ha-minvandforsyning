@@ -20,13 +20,13 @@ MAX_SCAN_INTERVAL = 86400  # 24 hours in seconds
 DEFAULT_SCAN_INTERVAL = 3600  # 1 hour in seconds
 
 SUPPLIER_ID_SCAN_MIN = 1
-SUPPLIER_ID_SCAN_MAX = 500
-# Each opt-in supplier search checks at most this many IDs.
+# Each supplier search checks at most this many IDs.
 SUPPLIER_ID_SCAN_BATCH_SIZE = 500
+SUPPLIER_ID_SCAN_MAX = SUPPLIER_ID_SCAN_MIN + SUPPLIER_ID_SCAN_BATCH_SIZE - 1
 SUPPLIER_SCAN_DELAY_SECONDS = 0.05
 # Some suppliers publish readings days late. Setup accepts a meter with a
 # reading from the last 7 days, and every poll asks for the same days.
-SUPPLIER_LOOKUP_DAYS = 7
+RECENT_READINGS_DAYS = 7
 SUPPLIER_ISSUE_URL = "https://github.com/hugo-brito/ha-minvandforsyning/issues/new"
 SUPPLIER_ISSUE_TEMPLATE = "add_supplier.yml"
 
@@ -34,6 +34,9 @@ SUPPLIER_ISSUE_TEMPLATE = "add_supplier.yml"
 # Bounded so we never monopolize the coordinator's update window.
 API_MAX_ATTEMPTS = 3
 API_BACKOFF_BASE_SECONDS = 1.0
+# Setup's first refresh runs while the setup dialog waits, so a Retry-After
+# from the API is honoured only up to this many seconds.
+API_RETRY_AFTER_MAX_SECONDS = 30.0
 API_TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 # Table index for hourly meter readings in the protobuf DataSet

@@ -12,6 +12,8 @@ from custom_components.minvandforsyning.api_client import (
     MinvandforsyningClient,
 )
 
+from .payloads import varint
+
 
 def _make_response(*, status=200, body=b""):
     resp = AsyncMock()
@@ -28,15 +30,6 @@ def _make_response(*, status=200, body=b""):
     return resp
 
 
-def _varint(value):
-    encoded = bytearray()
-    while value > 127:
-        encoded.append((value & 127) | 128)
-        value >>= 7
-    encoded.append(value)
-    return bytes(encoded)
-
-
 def _discovery_payload(reading_date=None, *, padding=0):
     """Build a synthetic DataSet with an optional zero-valued meter reading."""
     columns = [("ReadingDate", 2), ("Reading", 12), ("Consumption", 12)]
@@ -46,12 +39,12 @@ def _discovery_payload(reading_date=None, *, padding=0):
     data = b"\x0b\x0c" * 6 + b"\x0b"
     for name, proto_type in columns:
         encoded_name = name.encode("ascii")
-        data += b"\x13\x0a" + _varint(len(encoded_name)) + encoded_name
-        data += b"\x10" + _varint(proto_type) + b"\x14"
+        data += b"\x13\x0a" + varint(len(encoded_name)) + encoded_name
+        data += b"\x10" + varint(proto_type) + b"\x14"
 
     if reading_date is not None:
         seconds = int(reading_date.timestamp())
-        data += b"\x1b\x0b\x08" + _varint(seconds * 2) + b"\x10\x03\x0c"
+        data += b"\x1b\x0b\x08" + varint(seconds * 2) + b"\x10\x03\x0c"
         data += b"\x13\x08\x00\x14\x1b\x08\x00\x1c\x1c"
     return data + b"\x0c"
 
@@ -482,14 +475,31 @@ class TestTransientErrorRetry:
         assert first_delay >= 7.0
 
     @pytest.mark.asyncio
+    async def test_429_retry_after_is_capped(self, client, mock_session, no_sleep):
+        """Setup's first refresh waits for these retries, so a day is too long."""
+        fail_resp = self._make_resp(status=429)
+        fail_resp.headers = {"Retry-After": "86400"}
+        ok_resp = self._make_resp(status=200, body=b"\x0b")
+        mock_session.get = MagicMock(side_effect=[fail_resp, ok_resp])
+
+        await client.async_get_meter_data(
+            "12345678", 15,
+            datetime(2026, 1, 1), datetime(2026, 4, 11),
+        )
+        assert [call.args[0] for call in no_sleep.call_args_list] == [30.0]
+
+    @pytest.mark.parametrize(
+        "retry_after", ["Wed, 21 Oct 2026 07:28:00 GMT", "²"], ids=["http_date", "superscript"],
+    )
+    @pytest.mark.asyncio
     async def test_429_retry_after_non_numeric_falls_back_to_backoff(
-        self, client, mock_session, no_sleep
+        self, client, mock_session, no_sleep, retry_after
     ):
         """Malformed Retry-After (e.g. HTTP-date) is ignored; default backoff applies."""
         from custom_components.minvandforsyning.const import API_BACKOFF_BASE_SECONDS
 
         fail_resp = self._make_resp(status=429)
-        fail_resp.headers = {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}
+        fail_resp.headers = {"Retry-After": retry_after}
         ok_resp = self._make_resp(status=200, body=b"\x0b")
 
         call_count = 0
@@ -540,9 +550,8 @@ class TestSupplierDiscovery:
             yield
 
     @pytest.mark.asyncio
-    async def test_small_payload_with_zero_reading_is_a_match(self, client, mock_session):
+    async def test_zero_reading_is_a_match(self, client, mock_session):
         body = _discovery_payload(datetime.now(timezone.utc))
-        assert len(body) <= 910
         mock_session.get.return_value = _make_response(body=body)
 
         assert await client.async_discover_supplier_id("12345678") == 1
@@ -551,10 +560,12 @@ class TestSupplierDiscovery:
     @pytest.mark.asyncio
     async def test_large_empty_schema_is_not_a_match(self, client, mock_session):
         empty = _discovery_payload(padding=1000)
-        assert len(empty) > 910
+        match = _discovery_payload(datetime.now(timezone.utc))
+        # The response's size doesn't decide a match.
+        assert len(empty) > len(match)
         mock_session.get.side_effect = [
             _make_response(body=empty),
-            _make_response(body=_discovery_payload(datetime.now(timezone.utc))),
+            _make_response(body=match),
         ]
 
         assert await client.async_discover_supplier_id("12345678") == 2

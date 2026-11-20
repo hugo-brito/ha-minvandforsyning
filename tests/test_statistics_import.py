@@ -45,6 +45,8 @@ from custom_components.minvandforsyning.coordinator import (
     MinvandforsyningData,
 )
 
+from .payloads import supplier_response
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -579,7 +581,7 @@ class TestExternalStatisticsMetadata:
         assert metadata["name"] == f"Water Meter {_DEFAULT_METER} Total Consumption"
         assert metadata["unit_class"] == "volume"
         assert metadata["mean_type"] is StatisticMeanType.NONE
-        # Home Assistant replaced the deprecated has_mean key with mean_type.
+        # has_mean is deprecated; don't add it back.
         assert "has_mean" not in metadata
 
     @pytest.mark.asyncio
@@ -596,44 +598,10 @@ class TestExternalStatisticsMetadata:
         assert metadata["source"] == "minvandforsyning"
 
 
-def _varint(value: int) -> bytes:
-    encoded = bytearray()
-    while value > 127:
-        encoded.append((value & 127) | 128)
-        value >>= 7
-    encoded.append(value)
-    return bytes(encoded)
-
-
-def _decimal(value: str) -> bytes:
-    """Encode a decimal as its unscaled value and its scale."""
-    _, digits, exponent = Decimal(value).as_tuple()
-    encoded = b"\x08" + _varint(int("".join(map(str, digits))))
-    return encoded + (b"\x18" + _varint(-exponent << 1) if exponent < 0 else b"")
-
-
-def _supplier_response(readings: list[tuple[datetime, str, str]]) -> bytes:
-    """Encode readings like the supplier API, which puts them in its 7th table."""
-    response = b"\x0b\x0c" * 6 + b"\x0b"
-    for name, data_type in (("ReadingDate", 2), ("Reading", 12), ("Consumption", 12)):
-        response += (
-            b"\x13\x0a" + _varint(len(name)) + name.encode()
-            + b"\x10" + _varint(data_type) + b"\x14"
-        )
-    for reading_date, reading, consumption in readings:
-        seconds = int(reading_date.replace(tzinfo=timezone.utc).timestamp())
-        response += (
-            b"\x1b\x0b\x08" + _varint(seconds * 2) + b"\x10\x03\x0c"
-            + b"\x13" + _decimal(reading) + b"\x14"
-            + b"\x1b" + _decimal(consumption) + b"\x1c\x1c"
-        )
-    return response + b"\x0c"
-
-
 def _supplier(history_error: Exception | None = None) -> Callable[..., bytes]:
     """Answer like the supplier: a routine poll only gets the newest readings."""
     # The fixture's two newest readings.
-    latest = _supplier_response([
+    latest = supplier_response([
         (datetime(2026, 3, 30, 22), "103.046", "12"),
         (datetime(2026, 3, 30, 23), "103.052", "6"),
     ])
@@ -818,7 +786,7 @@ async def test_polls_import_readings_that_the_supplier_publishes_days_late(
 
     def respond(meter_number, supplier_id, date_from, date_to, **kwargs):
         # The API returns the published readings between the two dates.
-        return _supplier_response([
+        return supplier_response([
             reading
             for reading in readings
             if date_from.date() <= reading[0].date() < date_to.date()
@@ -841,11 +809,11 @@ async def test_polls_import_readings_that_the_supplier_publishes_days_late(
 
 
 @pytest.mark.usefixtures("recorder_mock")
-async def test_history_is_not_requested_every_poll_when_it_cannot_be_stored(
-    hass: HomeAssistant, supplier_api: MagicMock,
+async def test_a_meter_number_that_cannot_be_a_statistic_id_skips_statistics(
+    hass: HomeAssistant, supplier_api: MagicMock, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # Statistic IDs only allow lowercase letters, digits and underscores, so
-    # the recorder rejects every import for this meter.
+    """The recorder would reject every import, so none is tried."""
+    # Statistic IDs only allow lowercase letters, digits and underscores.
     meter = "AB-12345"
     supplier_api.async_get_meter_data.side_effect = _supplier()
     entry = MockConfigEntry(
@@ -868,7 +836,28 @@ async def test_history_is_not_requested_every_poll_when_it_cannot_be_stored(
         for call in supplier_api.async_get_meter_data.await_args_list
         if (call.args[3] - call.args[2]).days > 30
     ]
-    assert len(history_requests) == 1
+    assert history_requests == []
+    assert caplog.text.count(f"Can't store long-term statistics for meter {meter}") == 1
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_failed_history_import_is_tried_again_when_the_stream_is_empty(
+    hass: HomeAssistant, supplier_api: MagicMock,
+) -> None:
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    assert len(await _hourly_sums(hass)) == 2
+
+    # The user deletes the statistics after the supplier works again.
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+    get_instance(hass).async_clear_statistics([_DEFAULT_STATISTIC_ID])
+    await async_wait_recording_done(hass)
+    await hass.data[DOMAIN][entry.entry_id].async_refresh()
+    await _wait_for_statistics(hass)
+
+    sums = await _hourly_sums(hass)
+    assert len(sums) == 168
+    assert sums[-1] == pytest.approx(3.052)
 
 
 @dataclass(slots=True)
@@ -904,7 +893,7 @@ async def test_a_poll_during_a_backfill_continues_from_the_backfilled_sum(
 
     started, release = threading.Event(), threading.Event()
     get_instance(hass).queue_task(_BusyRecorderTask(started, release))
-    await hass.async_add_executor_job(started.wait, 10)
+    assert await hass.async_add_executor_job(started.wait, 10)
     try:
         with patch(
             "custom_components.minvandforsyning.coordinator.async_add_external_statistics",
@@ -913,7 +902,8 @@ async def test_a_poll_during_a_backfill_continues_from_the_backfilled_sum(
             backfill = hass.async_create_task(
                 coordinator.async_import_readings(history, force_full=True),
             )
-            await queued.wait()
+            async with asyncio.timeout(10):
+                await queued.wait()
             for _ in range(5):
                 await asyncio.sleep(0)
             # The recorder hasn't stored the backfill yet, so a poll that ran
@@ -930,6 +920,27 @@ async def test_a_poll_during_a_backfill_continues_from_the_backfilled_sum(
     sums = await _hourly_sums(hass)
     assert len(sums) == 169
     assert sums[-2:] == pytest.approx([3.052, 3.059])
+
+
+@pytest.mark.usefixtures("recorder_mock", "supplier_api")
+async def test_an_import_with_nothing_new_does_not_wait_for_the_recorder(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _set_up_meter(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    stored = coordinator.data
+
+    started, release = threading.Event(), threading.Event()
+    get_instance(hass).queue_task(_BusyRecorderTask(started, release))
+    assert await hass.async_add_executor_job(started.wait, 10)
+    # Unrelated work waits behind the busy task, as it would on a live system.
+    get_instance(hass).queue_task(_BusyRecorderTask(threading.Event(), release))
+    try:
+        # Every reading is stored already, so there's nothing to wait for.
+        async with asyncio.timeout(10):
+            await coordinator.async_import_readings(stored)
+    finally:
+        release.set()
 
 
 # ---------------------------------------------------------------------------

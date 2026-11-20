@@ -36,7 +36,7 @@ from custom_components.minvandforsyning.const import (
 )
 from custom_components.minvandforsyning.suppliers import KNOWN_SUPPLIERS
 
-from .test_statistics_import import _supplier_response
+from .payloads import supplier_response
 
 METER = "12345678"
 METER_DATA_URL = URL(f"{BROKER_API_URL}{METER_DATA_PATH}")
@@ -494,7 +494,7 @@ async def test_a_rate_limited_preview_does_not_hold_up_the_search(
     reading_date = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
     answers = [
         AiohttpClientMockResponse(
-            "get", METER_DATA_URL, response=_supplier_response([(reading_date, "103.052", "6")]),
+            "get", METER_DATA_URL, response=supplier_response([(reading_date, "103.052", "6")]),
         ),
         AiohttpClientMockResponse(
             "get", METER_DATA_URL, status=429, headers={"Retry-After": "86400"},

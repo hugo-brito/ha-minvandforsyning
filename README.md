@@ -197,7 +197,7 @@ Debug and warning log lines include your meter number. If you're sharing logs in
 
 ## Adding a supplier to the list
 
-Supplier suggestions arrive through the **Add a water supplier** issue form. To add one, put its supplier ID and name in `KNOWN_SUPPLIERS` in [`suppliers.py`](custom_components/minvandforsyning/suppliers.py). Setup sorts the list by name. Only add IDs that a successful setup has confirmed, and copy the name as plain text from the supplier's own website: setup shows it as Markdown, so a name from an issue could otherwise add a link.
+Supplier suggestions arrive through the **Add a water supplier** issue form. To add one, put its supplier ID and name in `KNOWN_SUPPLIERS` in [`suppliers.py`](custom_components/minvandforsyning/suppliers.py), following the rules at the top of that file. Setup sorts the list by name.
 
 ## License
 
