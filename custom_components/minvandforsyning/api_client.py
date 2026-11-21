@@ -128,13 +128,14 @@ def parse_readings(raw: bytes, now: datetime) -> list[MeterReading]:
     return readings
 
 
-def retry_after_seconds(headers: Mapping[str, str] | None) -> int | None:
+def retry_after_seconds(headers: Mapping[str, str] | None) -> float | None:
     """Return the pause a Retry-After header asks for, in seconds.
 
-    Returns None without the header, or for its HTTP date form.
+    Returns None without the header, or for its HTTP date form. An absurdly
+    long value becomes infinity, which callers cap, instead of an error.
     """
     value = (headers or {}).get("Retry-After", "")
-    return int(value) if value.isdecimal() else None
+    return float(value) if value.isdecimal() else None
 
 
 class AuthTokens:

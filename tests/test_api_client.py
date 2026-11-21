@@ -535,13 +535,14 @@ class TestTransientErrorRetry:
         )
         assert [call.args[0] for call in no_sleep.call_args_list] == [30.0]
 
+    @pytest.mark.parametrize("retry_after", ["31", "9" * 5000], ids=["31", "5000_digits"])
     @pytest.mark.asyncio
     async def test_429_with_a_longer_retry_after_is_raised_at_once(
-        self, client, mock_session, no_sleep,
+        self, client, mock_session, no_sleep, retry_after,
     ):
         """Trying again before the API's pause ends would only get another 429."""
         fail_resp = self._make_resp(status=429)
-        fail_resp.headers = {"Retry-After": "31"}
+        fail_resp.headers = {"Retry-After": retry_after}
         mock_session.get = MagicMock(return_value=fail_resp)
 
         with pytest.raises(ClientResponseError) as exc_info:
