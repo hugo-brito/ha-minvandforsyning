@@ -515,7 +515,7 @@ class TestImportOptionFlag:
 
         expected_name = f"{DOMAIN}_import_stats_MMM1"
         assert any(
-            call.kwargs.get("name") == expected_name
+            expected_name in (*call.args[1:2], call.kwargs.get("name"))
             for call in coord.hass.async_create_background_task.call_args_list
         ), f"Expected background task named {expected_name!r}"
         # Drain the coroutines so pytest doesn't warn.
@@ -902,6 +902,40 @@ async def test_removing_a_meter_removes_its_count_of_failed_history_imports(
     assert not [key for key in hass_storage if entry.entry_id in key]
 
 
+@pytest.mark.usefixtures("recorder_mock")
+async def test_removing_a_meter_during_its_history_import_stores_nothing(
+    hass: HomeAssistant, supplier_api: MagicMock, hass_storage: dict[str, Any],
+) -> None:
+    """The import mustn't outlive the meter, or it stores its count again."""
+    started, release = asyncio.Event(), asyncio.Event()
+    newest = _supplier()
+
+    async def respond(meter_number, supplier_id, date_from, date_to, **kwargs):
+        if (date_to - date_from).days <= 30:
+            return newest(meter_number, supplier_id, date_from, date_to)
+        started.set()
+        await release.wait()
+        raise ClientConnectionError
+
+    supplier_api.async_get_meter_data.side_effect = respond
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=_DEFAULT_METER,
+        data={"meter_number": _DEFAULT_METER, "supplier_id": 1},
+        options={"import_statistics": True},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    async with asyncio.timeout(10):
+        await started.wait()
+
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    release.set()
+    await _wait_for_statistics(hass)
+
+    assert not [key for key in hass_storage if entry.entry_id in key]
+
+
 def _hourly_readings(start: datetime, hours: int) -> list[tuple[datetime, str, str]]:
     """Hourly readings of 10 L each, as the supplier reports them."""
     return [
@@ -1253,7 +1287,7 @@ class TestHourAlignment:
         assert start.minute == 0
         assert start.second == 0
         assert start.microsecond == 0
-        assert any("not on the hour" in message for message in caplog.messages)
+        assert any("aren't on the hour" in message for message in caplog.messages)
 
     @pytest.mark.asyncio
     async def test_off_hour_readings_log_one_warning_per_import(self, caplog):
@@ -1272,9 +1306,11 @@ class TestHourAlignment:
             await coord.async_import_readings(data)
 
         assert len(p.import_stats.call_args[0][2]) == 5
-        warnings = [message for message in caplog.messages if "not on the hour" in message]
-        assert len(warnings) == 1
-        assert warnings[0].startswith("5 readings")
+        warnings = [message for message in caplog.messages if "on the hour" in message]
+        assert warnings == [
+            f"Readings for meter {coord.meter_number} that aren't on the hour: 5. "
+            "Each is stored in the hour its interval starts in"
+        ]
 
     @pytest.mark.asyncio
     async def test_stored_off_hour_readings_do_not_warn_again(self, caplog):
@@ -1293,7 +1329,7 @@ class TestHourAlignment:
         with caplog.at_level(logging.WARNING), _RecorderPatches(last_stats=stored):
             await coord.async_import_readings(MinvandforsyningData([reading]))
 
-        assert not [message for message in caplog.messages if "not on the hour" in message]
+        assert not [message for message in caplog.messages if "on the hour" in message]
 
 
 # ---------------------------------------------------------------------------
@@ -1832,8 +1868,9 @@ class _capture_background_tasks:
         self.captured: list[Any] = []
 
     def __enter__(self) -> list[Any]:
-        def _schedule(coro: Any, name: str | None = None) -> None:
+        def _schedule(coro: Any, name: str | None = None, eager_start: bool = True) -> MagicMock:
             self.captured.append(coro)
+            return MagicMock()
 
         self._hass.async_create_background_task = MagicMock(side_effect=_schedule)
         return self.captured

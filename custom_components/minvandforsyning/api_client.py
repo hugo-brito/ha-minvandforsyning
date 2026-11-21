@@ -51,10 +51,11 @@ _READING_COLUMNS = frozenset({COL_READING_DATE, COL_READING, COL_CONSUMPTION})
 # allows for a clock that is slightly behind.
 _EARLIEST_READING_DATE = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _FUTURE_READING_TOLERANCE = timedelta(hours=1)
-# Far above what a meter reports. One larger hour would make the running sum
-# so large that every later hour would be too small to add to it.
+# Far beyond what a meter reports. A larger Reading would break the total
+# sensor. A larger Consumption would make the running sum so large that every
+# later hour would be too small to add to it.
 _READING_LIMIT_M3 = Decimal(10**9)
-_CONSUMPTION_LIMIT_LITERS = Decimal(10**6)
+_CONSUMPTION_LIMIT_LITERS = Decimal(10**9)
 
 
 def _raise_for_status(resp: ClientResponse) -> None:
@@ -140,7 +141,7 @@ def parse_readings(raw: bytes, now: datetime) -> list[MeterReading]:
             and _EARLIEST_READING_DATE <= _as_utc(date) <= latest
             and reading.is_finite()
             and consumption.is_finite()
-            and 0 <= reading < _READING_LIMIT_M3
+            and abs(reading) < _READING_LIMIT_M3
             and abs(consumption) <= _CONSUMPTION_LIMIT_LITERS
         ):
             readings.append(MeterReading(date, reading, consumption))
@@ -216,12 +217,12 @@ class MinvandforsyningClient:
             if not isinstance(context_token, str) or not isinstance(easy_auth_token, str):
                 raise TypeError("The tokens aren't text")
             expiry = datetime.fromisoformat(token_data["expiry"].replace("Z", "+00:00"))
-        except (AttributeError, KeyError, TypeError, ValueError) as err:
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            # Refresh the tokens 5 minutes before they expire.
+            expires_at = expiry - timedelta(minutes=5)
+        except (AttributeError, KeyError, OverflowError, TypeError, ValueError) as err:
             raise TokenRequestError("The token service answered in an unexpected form") from err
-        if expiry.tzinfo is None:
-            expiry = expiry.replace(tzinfo=timezone.utc)
-        # Refresh the tokens 5 minutes before they expire.
-        expires_at = expiry - timedelta(minutes=5)
 
         self._tokens = AuthTokens(
             context_token=context_token,

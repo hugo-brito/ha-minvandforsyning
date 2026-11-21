@@ -322,23 +322,36 @@ async def test_a_rate_limited_setup_is_retried_when_the_api_asks(
     assert entry.state is ConfigEntryState.LOADED
 
 
+@pytest.mark.parametrize(
+    ("error", "shown"),
+    [
+        pytest.param(
+            ConnectionTimeoutError(
+                "Connection timeout to host "
+                f"{URL(f'{BROKER_API_URL}{METER_DATA_PATH}').with_query(MeterNumber=_METER)}"
+            ),
+            f"Connection timeout to host {BROKER_API_URL}{METER_DATA_PATH}",
+            id="text_with_the_request",
+        ),
+        pytest.param(TimeoutError(), "TimeoutError", id="no_text"),
+    ],
+)
 @pytest.mark.usefixtures("recorder_mock")
-async def test_a_connection_timeout_does_not_log_the_request(
-    hass: HomeAssistant, meter_api: MagicMock, caplog: pytest.LogCaptureFixture,
+async def test_a_connection_error_is_logged_without_the_meter_number(
+    hass: HomeAssistant,
+    meter_api: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+    shown: str,
 ) -> None:
-    """aiohttp's text for it has the request URL, with the meter number."""
+    """aiohttp's text for some errors has the request URL, with the meter number."""
     coordinator = await _set_up_meter(hass)
-    url = URL(f"{BROKER_API_URL}{METER_DATA_PATH}").with_query(MeterNumber=_METER)
-    meter_api.async_get_meter_data.side_effect = ConnectionTimeoutError(
-        f"Connection timeout to host {url}"
-    )
+    meter_api.async_get_meter_data.side_effect = error
 
     await coordinator.async_refresh()
 
     errors = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
-    assert errors == [
-        f"Error fetching {DOMAIN} data: Error fetching meter data: ConnectionTimeoutError"
-    ]
+    assert errors == [f"Error fetching {DOMAIN} data: Error fetching meter data: {shown}"]
 
 
 @pytest.mark.usefixtures("recorder_mock")

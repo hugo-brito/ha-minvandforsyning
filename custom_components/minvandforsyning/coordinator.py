@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from aiohttp import ClientError, ClientResponseError
+from aiohttp import ClientResponseError
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import (
     StatisticData,
@@ -54,6 +55,8 @@ _READING_DATE_ZONE = ZoneInfo(READING_DATE_TZ)
 _RECORDER_COMMIT_TIMEOUT_SECONDS = 300
 _HISTORY_STORE_VERSION = 1
 _FAILED_HISTORY_IMPORTS = "failed_history_imports"
+# The query of a URL in an error's text, up to a space or a quote.
+_URL_QUERY = re.compile(r"\?[^\s'\"]*")
 
 
 def history_import_store(hass: HomeAssistant, entry_id: str) -> Store[dict[str, int]]:
@@ -204,11 +207,11 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 f"Error fetching meter data: HTTP {err.status}",
                 retry_after=self._pause_after_rate_limit(err),
             ) from err
-        except (ClientError, TimeoutError) as err:
-            # Some of these name the request URL too.
-            raise UpdateFailed(f"Error fetching meter data: {type(err).__name__}") from err
         except Exception as err:
-            raise UpdateFailed(f"Error fetching meter data: {err}") from err
+            # Some aiohttp errors, like a connection timeout, include the
+            # request URL, whose query has the meter number.
+            detail = _URL_QUERY.sub("", str(err)) or type(err).__name__
+            raise UpdateFailed(f"Error fetching meter data: {detail}") from err
 
         try:
             # Years of readings take seconds to parse on a small computer.
@@ -241,9 +244,11 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         result = await self.async_fetch_window(RECENT_READINGS_DAYS)
 
         if self._import_statistics:
-            self.hass.async_create_background_task(
+            # Tied to the entry, so unloading it stops the import.
+            self.config_entry.async_create_background_task(
+                self.hass,
                 self._safe_import_readings(result),
-                name=f"{DOMAIN}_import_stats_{self._meter_number}",
+                f"{DOMAIN}_import_stats_{self._meter_number}",
             )
         return result
 
@@ -257,7 +262,8 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         during ``[T-1, T)``. Home Assistant statistics are keyed by the *start*
         of the hour, so the bucket start is ``ReadingDate`` (as UTC) minus one
         hour. UTC has no DST, so there is no fold or spring-forward gap to
-        handle. A date that isn't on the hour counts toward the hour it falls in.
+        handle. A date that isn't on the hour is stored in the hour its
+        interval starts in.
         """
         return _interval_start_utc(reading_date).replace(minute=0, second=0, microsecond=0)
 
@@ -277,7 +283,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         except Exception:  # noqa: BLE001 - tried again, then the latest readings are imported
             failed = self._failed_history_imports + 1
             if failed < HISTORY_IMPORT_ATTEMPTS:
-                await self._async_count_failed_history_imports(failed)
+                await self._async_set_failed_history_imports(failed)
                 _LOGGER.warning(
                     "Could not import the supplier history for meter %s; "
                     "trying again at the next poll",
@@ -294,7 +300,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 exc_info=True,
             )
             imported_history = False
-        await self._async_count_failed_history_imports(0)
+        await self._async_set_failed_history_imports(0)
         if imported_history:
             return
         try:
@@ -307,7 +313,11 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             )
 
     async def _async_load_failed_history_imports(self) -> None:
-        """Read the count of failed history imports once per setup."""
+        """Read the stored count of failed history imports, once per setup.
+
+        After that, the count in memory is current. If reading fails, the
+        count starts at 0.
+        """
         if self._history_store is not None:
             return
         self._history_store = history_import_store(self.hass, self.config_entry.entry_id)
@@ -324,8 +334,8 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         if isinstance(count, int) and count > 0:
             self._failed_history_imports = count
 
-    async def _async_count_failed_history_imports(self, count: int) -> None:
-        """Store the count of failed history imports, if it changed."""
+    async def _async_set_failed_history_imports(self, count: int) -> None:
+        """Set and store the count of failed history imports, if it changed."""
         if count == self._failed_history_imports:
             return
         self._failed_history_imports = count
@@ -487,10 +497,10 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
 
         if off_hour:
             _LOGGER.warning(
-                "%d readings for meter %s are not on the hour; each counts toward "
-                "the hour it falls in",
-                off_hour,
+                "Readings for meter %s that aren't on the hour: %d. Each is stored "
+                "in the hour its interval starts in",
                 self._meter_number,
+                off_hour,
             )
         if not statistics:
             return False
