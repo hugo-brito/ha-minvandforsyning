@@ -337,14 +337,17 @@ async def test_a_rate_limited_setup_is_retried_when_the_api_asks(
     ],
 )
 @pytest.mark.usefixtures("recorder_mock")
-async def test_a_connection_error_is_logged_without_the_meter_number(
+async def test_a_connection_error_message_leaves_out_the_meter_number(
     hass: HomeAssistant,
     meter_api: MagicMock,
     caplog: pytest.LogCaptureFixture,
     error: Exception,
     shown: str,
 ) -> None:
-    """aiohttp's text for some errors has the request URL, with the meter number."""
+    """The message is shown on the integrations page and in the error log.
+
+    aiohttp's text for some errors has the request URL, with the meter number.
+    """
     coordinator = await _set_up_meter(hass)
     meter_api.async_get_meter_data.side_effect = error
 

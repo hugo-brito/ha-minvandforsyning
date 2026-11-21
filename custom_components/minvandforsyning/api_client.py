@@ -51,9 +51,10 @@ _READING_COLUMNS = frozenset({COL_READING_DATE, COL_READING, COL_CONSUMPTION})
 # allows for a clock that is slightly behind.
 _EARLIEST_READING_DATE = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _FUTURE_READING_TOLERANCE = timedelta(hours=1)
-# Far beyond what a meter reports. A larger Reading would break the total
-# sensor. A larger Consumption would make the running sum so large that every
-# later hour would be too small to add to it.
+# Far beyond what a meter reports, so a value at least this large, positive or
+# negative, must be corrupt. Each hour's sum continues from the one before, so
+# a corrupt Consumption would stay in the statistics for good, and a corrupt
+# Reading would show on the total sensor.
 _READING_LIMIT_M3 = Decimal(10**9)
 _CONSUMPTION_LIMIT_LITERS = Decimal(10**9)
 
@@ -142,7 +143,7 @@ def parse_readings(raw: bytes, now: datetime) -> list[MeterReading]:
             and reading.is_finite()
             and consumption.is_finite()
             and abs(reading) < _READING_LIMIT_M3
-            and abs(consumption) <= _CONSUMPTION_LIMIT_LITERS
+            and abs(consumption) < _CONSUMPTION_LIMIT_LITERS
         ):
             readings.append(MeterReading(date, reading, consumption))
 
@@ -205,10 +206,11 @@ class MinvandforsyningClient:
             except (ContentTypeError, ValueError) as err:
                 raise TokenRequestError("The token service didn't answer with JSON") from err
 
-        if not isinstance(data, dict) or not data.get("success"):
-            errors = data.get("errors", []) if isinstance(data, dict) else []
+        if not isinstance(data, dict):
+            raise TokenRequestError("The token service answered in an unexpected form")
+        if not data.get("success"):
             # The service's text goes into log lines, so escape and shorten it.
-            raise TokenRequestError(f"Token request failed: {errors!r:.200}")
+            raise TokenRequestError(f"Token request failed: {data.get('errors', [])!r:.200}")
 
         try:
             token_data = data["payload"]
@@ -286,6 +288,8 @@ class MinvandforsyningClient:
                             retry_after = retry_after_seconds(resp.headers)
                             # Trying again before the pause ends would only get
                             # another 429, so a long pause is left to the caller.
+                            # Only the seconds form is read: a date counts as no
+                            # header.
                             if not retry_rate_limited or (
                                 retry_after is not None
                                 and retry_after > API_RETRY_AFTER_MAX_SECONDS
@@ -299,14 +303,14 @@ class MinvandforsyningClient:
                         )
                         await asyncio.sleep(delay)
                         continue
-                    # Success path, or final attempt on a transient status:
-                    # this turns 3xx/4xx/5xx into ClientResponseError, which
-                    # the except below propagates.
+                    # Success, or a status that won't be retried: this turns a
+                    # redirect or an error status into ClientResponseError.
                     _raise_for_status(resp)
                     return await resp.read()
             except ClientResponseError:
-                # HTTP status error: fail fast. Transient statuses that reach
-                # here did so only because retries were exhausted.
+                # Whether a status is retried is decided above. This also
+                # passes on a 429 that isn't waited for, and an error from the
+                # token service.
                 raise
             except (ClientError, asyncio.TimeoutError) as err:
                 if last_attempt:

@@ -230,7 +230,8 @@ class MinvandforsyningConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _async_validate_supplier(self, supplier_id: int) -> dict[str, str]:
         """Check that the supplier has recent readings for the meter."""
         try:
-            # Fail fast: a Retry-After of hours would leave the form waiting.
+            # Report a rate limit at once instead of waiting up to 30 seconds,
+            # twice, with the form open.
             reading = await self._get_client().async_get_latest_reading(
                 self._meter_number, supplier_id, retry_rate_limited=False,
             )

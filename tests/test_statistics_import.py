@@ -602,7 +602,9 @@ class TestExternalStatisticsMetadata:
         assert metadata["source"] == "minvandforsyning"
 
 
-def _supplier(history_error: Exception | None = None) -> Callable[..., bytes]:
+def _supplier(
+    history_error: Exception | None = None, history: bytes | None = None,
+) -> Callable[..., bytes]:
     """Answer like the supplier: a routine poll only gets the newest readings."""
     # The fixture's two newest readings.
     latest = supplier_response([
@@ -615,7 +617,7 @@ def _supplier(history_error: Exception | None = None) -> Callable[..., bytes]:
             return latest
         if history_error is not None:
             raise history_error
-        return _load_fixture_bytes()
+        return _load_fixture_bytes() if history is None else history
 
     return respond
 
@@ -752,11 +754,22 @@ async def test_deleted_statistics_are_rebuilt_from_the_supplier_history(
     assert sums[-1] == pytest.approx(3.052)
 
 
+@pytest.mark.parametrize(
+    "failing_supplier",
+    [
+        pytest.param(_supplier(ClientConnectionError()), id="no_answer"),
+        # The history includes the newest readings, so it can't be empty.
+        pytest.param(_supplier(history=supplier_response([])), id="no_readings"),
+    ],
+)
 @pytest.mark.usefixtures("recorder_mock")
 async def test_a_failed_history_import_is_tried_again_at_the_next_poll(
-    hass: HomeAssistant, supplier_api: MagicMock, caplog: pytest.LogCaptureFixture,
+    hass: HomeAssistant,
+    supplier_api: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    failing_supplier: Callable[..., bytes],
 ) -> None:
-    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    supplier_api.async_get_meter_data.side_effect = failing_supplier
 
     entry = await _set_up_meter(hass)
 
@@ -775,6 +788,22 @@ async def test_a_failed_history_import_is_tried_again_at_the_next_poll(
     sums = await _hourly_sums(hass)
     assert len(sums) == 168
     assert sums[-1] == pytest.approx(3.052)
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_meter_without_readings_does_not_count_failed_history_imports(
+    hass: HomeAssistant,
+    supplier_api: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    hass_storage: dict[str, Any],
+) -> None:
+    """Without readings anywhere, there's nothing to keep the history from."""
+    supplier_api.async_get_meter_data.return_value = supplier_response([])
+
+    entry = await _set_up_meter(hass)
+
+    assert "Could not import the supplier history" not in caplog.text
+    assert not [key for key in hass_storage if entry.entry_id in key]
 
 
 async def _fail_the_history_import_every_time(
@@ -1686,7 +1715,7 @@ class TestHydrate:
             with caplog.at_level(
                 "WARNING", logger="custom_components.minvandforsyning.coordinator",
             ):
-                # False lets the latest readings be imported instead.
+                # An empty history is only an error when readings are required.
                 assert await coord.async_hydrate() is False
 
         assert p.import_stats.call_count == 0

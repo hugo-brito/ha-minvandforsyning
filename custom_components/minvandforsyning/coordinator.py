@@ -43,7 +43,7 @@ from .const import (
     HISTORY_IMPORT_ATTEMPTS,
     INITIAL_HYDRATE_DAYS,
     LITERS_PER_CUBIC_METER,
-    MAX_SCAN_INTERVAL,
+    RATE_LIMIT_MAX_PAUSE_SECONDS,
     READING_DATE_TZ,
     RECENT_READINGS_DAYS,
     STATISTIC_ID_FORMAT,
@@ -237,7 +237,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             # of the interval, which must stay the shortest wait.
             seconds = max(seconds, self.update_interval.total_seconds())
         # Home Assistant limits the wait of a setup retry, but not of a poll.
-        return min(seconds, MAX_SCAN_INTERVAL)
+        return min(seconds, RATE_LIMIT_MAX_PAUSE_SECONDS)
 
     async def _async_update_data(self) -> MinvandforsyningData:
         """Fetch and parse meter data for the routine poll window."""
@@ -274,12 +274,13 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         these readings. Storing these first would make the history import
         skip everything older, so after a failed history import they wait for
         the next poll to try again, up to HISTORY_IMPORT_ATTEMPTS in a row.
+        A history without readings fails too, unless these have none either.
         """
         if not self._can_store_statistics:
             return
         await self._async_load_failed_history_imports()
         try:
-            imported_history = await self.async_hydrate()
+            imported_history = await self.async_hydrate(require_readings=bool(data.readings))
         except Exception:  # noqa: BLE001 - tried again, then the latest readings are imported
             failed = self._failed_history_imports + 1
             if failed < HISTORY_IMPORT_ATTEMPTS:
@@ -353,12 +354,15 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 exc_info=True,
             )
 
-    async def async_hydrate(self, days: int = INITIAL_HYDRATE_DAYS) -> bool:
+    async def async_hydrate(
+        self, days: int = INITIAL_HYDRATE_DAYS, *, require_readings: bool = False,
+    ) -> bool:
         """Import multi-year supplier history into an empty LTS stream.
 
         Idempotent: if the external statistic stream already contains any data,
         this is a no-op. Safe to call repeatedly. Returns True if it imported
-        history.
+        history. With ``require_readings``, a history without readings raises
+        UpdateFailed.
         """
         if not self._import_statistics:
             _LOGGER.debug(
@@ -383,6 +387,8 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         )
         data = await self.async_fetch_window(days)
         if not data.readings:
+            if require_readings:
+                raise UpdateFailed("The supplier history has no readings")
             _LOGGER.warning(
                 "Hydrate fetched 0 readings for meter %s; nothing imported",
                 self._meter_number,

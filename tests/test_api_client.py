@@ -206,7 +206,7 @@ class TestMinvandforsyningClient:
     ):
         mock_session.post = MagicMock(return_value=_token_response(response_data))
 
-        with pytest.raises(TokenRequestError):
+        with pytest.raises(TokenRequestError, match="unexpected form"):
             await client.async_get_tokens()
 
     @pytest.mark.asyncio
@@ -866,9 +866,10 @@ class TestSupplierDiscovery:
             ),
             pytest.param({"Reading": True}, id="bool_reading"),
             pytest.param({"Consumption": 6.0}, id="float_consumption"),
-            # One huge hour would make every later hour too small to add to the sum.
+            # Far beyond what a meter reports, so the data must be corrupt.
             pytest.param({"Consumption": Decimal(2**63 - 1)}, id="huge_consumption"),
-            pytest.param({"Consumption": Decimal(-(10**9) - 1)}, id="huge_negative_consumption"),
+            pytest.param({"Consumption": Decimal(10**9)}, id="consumption_at_the_limit"),
+            pytest.param({"Consumption": Decimal(-(10**9))}, id="huge_negative_consumption"),
             pytest.param({"Reading": Decimal(10**9)}, id="huge_reading"),
             pytest.param({"Reading": Decimal(-(10**9))}, id="huge_negative_reading"),
             pytest.param({"Reading": Decimal("NaN")}, id="nan_reading"),
@@ -903,9 +904,9 @@ class TestSupplierDiscovery:
         ("reading", "consumption"),
         [
             # A large building's catch-up after weeks without readings.
-            pytest.param("999999999.999", "1000000000", id="largest"),
+            pytest.param("999999999.999", "999999999", id="largest"),
             # A correction, and a meter replacement.
-            pytest.param("-0.002", "-1000000000", id="largest_negative"),
+            pytest.param("-0.002", "-999999999", id="largest_negative"),
         ],
     )
     @pytest.mark.asyncio

@@ -38,6 +38,9 @@ API_BACKOFF_BASE_SECONDS = 1.0
 # A longer pause fails the request, and Home Assistant waits that long before
 # the next poll or setup retry.
 API_RETRY_AFTER_MAX_SECONDS = 30.0
+# The longest a poll waits after a rate limit, like Home Assistant's limit for
+# setup retries.
+RATE_LIMIT_MAX_PAUSE_SECONDS = 86400  # 24 hours
 API_TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 # Table index for hourly meter readings in the protobuf DataSet

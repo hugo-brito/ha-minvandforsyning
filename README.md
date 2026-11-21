@@ -97,7 +97,7 @@ Each hourly reading is recorded at the supplier's reported timestamp, not at the
 
 When the stream is empty, for example right after you install the integration, the next import fetches up to 5 years of supplier history in a single API call and imports every reading. Once the stream has data, only new readings are imported. If you delete the stream, the next poll rebuilds it from the supplier's history.
 
-If the supplier doesn't answer the history request, the stream stays empty and the next poll asks again. After 3 failed attempts in a row, the integration imports the newest readings instead. See [Long-term statistics only start on the day I installed the integration](#long-term-statistics-only-start-on-the-day-i-installed-the-integration) to import the history later.
+If the history request fails, or its answer has no readings although the poll found some, the stream stays empty and the next poll asks again. After 3 failed attempts in a row, the integration imports the newest readings instead. See [Long-term statistics only start on the day I installed the integration](#long-term-statistics-only-start-on-the-day-i-installed-the-integration) to import the history later.
 
 ### Using the new stream in the Energy dashboard
 
@@ -134,7 +134,7 @@ Deleting the integration's config entry removes the sensor entities but leaves t
 
 The integration talks to the same public API that the minvandforsyning.dk website uses. It fetches anonymous access tokens (no login required) and retrieves meter data in a binary protobuf format, which is decoded locally with a pure Python parser - zero external dependencies.
 
-If the API asks the integration to wait 30 seconds or less, the request waits and tries again, up to 2 times. When the API asks for a longer pause, Home Assistant waits that long before the next poll: at least the polling interval, and at most 24 hours.
+While polling, if the API asks the integration to wait 30 seconds or less, the request waits and tries again, up to 2 times. When the API asks for a longer pause, Home Assistant waits that long before the next poll: at least the polling interval, and at most 24 hours. During setup, checking or searching for a supplier stops as soon as the API limits a request.
 
 ## Troubleshooting
 
@@ -186,7 +186,7 @@ You don't need to remove or re-add the Water source in the Energy dashboard - it
 
 ### Long-term statistics only start on the day I installed the integration
 
-Versions 1.0.26156.1 to 1.0.26217.1 could skip the supplier's history during setup. The history is also skipped if the supplier doesn't answer the history request 3 polls in a row, in which case the log says `Could not import the supplier history for meter <meter_number> after 3 attempts`. To import it, call the backfill service:
+Versions 1.0.26156.1 to 1.0.26217.1 could skip the supplier's history during setup. The history is also skipped if the history request fails 3 polls in a row, in which case the log says `Could not import the supplier history for meter <meter_number> after 3 attempts`. To import it, call the backfill service:
 
 ```yaml
 service: minvandforsyning.backfill_statistics
