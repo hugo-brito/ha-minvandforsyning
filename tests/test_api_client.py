@@ -35,6 +35,17 @@ def _make_response(*, status=200, body=b""):
     return resp
 
 
+def _token_response(data):
+    """A token service answer with this JSON."""
+    resp = AsyncMock()
+    resp.status = 200
+    resp.raise_for_status = MagicMock()
+    resp.json = AsyncMock(return_value=data)
+    resp.__aenter__ = AsyncMock(return_value=resp)
+    resp.__aexit__ = AsyncMock(return_value=False)
+    return resp
+
+
 def _discovery_payload(reading_date=None, *, padding=0, reading="0"):
     """A supplier response with an optional meter reading, zero by default."""
     readings = [] if reading_date is None else [(reading_date, reading, "0")]
@@ -88,12 +99,7 @@ class TestMinvandforsyningClient:
             "errors": [],
         }
 
-        mock_resp = AsyncMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.json = AsyncMock(return_value=response_data)
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
-        mock_session.post = MagicMock(return_value=mock_resp)
+        mock_session.post = MagicMock(return_value=_token_response(response_data))
 
         tokens = await client.async_get_tokens()
         assert tokens.context_token == "test_ctx_token"
@@ -115,12 +121,7 @@ class TestMinvandforsyningClient:
             "errors": [],
         }
 
-        mock_resp = AsyncMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.json = AsyncMock(return_value=response_data)
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
-        mock_session.post = MagicMock(return_value=mock_resp)
+        mock_session.post = MagicMock(return_value=_token_response(response_data))
 
         tokens1 = await client.async_get_tokens()
         tokens2 = await client.async_get_tokens()
@@ -136,12 +137,7 @@ class TestMinvandforsyningClient:
             "errors": ["Invalid request"],
         }
 
-        mock_resp = AsyncMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.json = AsyncMock(return_value=response_data)
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
-        mock_session.post = MagicMock(return_value=mock_resp)
+        mock_session.post = MagicMock(return_value=_token_response(response_data))
 
         with pytest.raises(TokenRequestError, match="Token request failed"):
             await client.async_get_tokens()
@@ -149,18 +145,101 @@ class TestMinvandforsyningClient:
     @pytest.mark.asyncio
     async def test_get_tokens_without_json_is_a_token_failure(self, client, mock_session):
         """An error page with status 200 is no HTTP error, and reporting it as one misleads."""
-        mock_resp = AsyncMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.json = AsyncMock(side_effect=ContentTypeError(
+        mock_resp = _token_response(None)
+        mock_resp.json.side_effect = ContentTypeError(
             MagicMock(), (), status=200,
             message="Attempt to decode JSON with unexpected mimetype: text/html",
-        ))
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
+        )
         mock_session.post = MagicMock(return_value=mock_resp)
 
         with pytest.raises(TokenRequestError):
             await client.async_get_tokens()
+
+    @pytest.mark.parametrize(
+        "response_data",
+        [
+            pytest.param([], id="list"),
+            pytest.param({"success": True}, id="no_payload"),
+            pytest.param(
+                {"success": True, "payload": {"expiry": "2026-01-01T00:00:00Z"}},
+                id="no_tokens",
+            ),
+            pytest.param(
+                {
+                    "success": True,
+                    "payload": {
+                        "anonymousUserContextToken": "ctx",
+                        "easyAuthToken": "auth",
+                        "expiry": "soon",
+                    },
+                },
+                id="bad_expiry",
+            ),
+            pytest.param(
+                {
+                    "success": True,
+                    "payload": {
+                        "anonymousUserContextToken": 1,
+                        "easyAuthToken": "auth",
+                        "expiry": "2099-01-01T00:00:00Z",
+                    },
+                },
+                id="token_not_text",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_get_tokens_in_an_unexpected_form_is_a_token_failure(
+        self, client, mock_session, response_data,
+    ):
+        mock_session.post = MagicMock(return_value=_token_response(response_data))
+
+        with pytest.raises(TokenRequestError):
+            await client.async_get_tokens()
+
+    @pytest.mark.asyncio
+    async def test_get_tokens_reads_an_expiry_without_a_zone_as_utc(self, client, mock_session):
+        """Comparing it with the time would fail every later request."""
+        mock_session.post = MagicMock(return_value=_token_response({
+            "success": True,
+            "payload": {
+                "anonymousUserContextToken": "ctx",
+                "easyAuthToken": "auth",
+                "expiry": "2099-01-01T00:00:00",
+            },
+        }))
+
+        tokens = await client.async_get_tokens()
+
+        assert not tokens.expired
+        assert tokens.expires_at == datetime(2098, 12, 31, 23, 55, tzinfo=timezone.utc)
+
+    @pytest.mark.asyncio
+    async def test_token_errors_cannot_add_lines_to_the_log(self, client, mock_session):
+        """The token service's text ends up in error messages and the log."""
+        mock_session.post = MagicMock(return_value=_token_response({
+            "success": False,
+            "errors": "busy\nERROR forged line\x1b[2J" + "x" * 1000,
+        }))
+
+        with pytest.raises(TokenRequestError) as exc_info:
+            await client.async_get_tokens()
+
+        message = str(exc_info.value)
+        assert "\n" not in message
+        assert "\x1b" not in message
+        assert len(message) < 300
+
+    @pytest.mark.asyncio
+    async def test_token_redirects_are_not_followed(self, client, mock_session):
+        """A redirect could send the request to any address, even one in the home."""
+        mock_session.post = MagicMock(return_value=_make_response(status=307))
+
+        with pytest.raises(ClientResponseError) as exc_info:
+            await client.async_get_tokens()
+
+        assert exc_info.value.status == 307
+        assert mock_session.post.call_args.kwargs["allow_redirects"] is False
 
     @pytest.mark.asyncio
     async def test_get_meter_data(self, client, mock_session):
@@ -172,12 +251,7 @@ class TestMinvandforsyningClient:
         )
 
         fake_binary = b"\x0b\x12\x34"  # dummy protobuf data
-        mock_resp = AsyncMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.read = AsyncMock(return_value=fake_binary)
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
-        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.get = MagicMock(return_value=_make_response(body=fake_binary))
 
         result = await client.async_get_meter_data(
             "12345678", 15,
@@ -240,12 +314,7 @@ class TestTokenRefreshOn401:
             },
             "errors": [],
         }
-        token_resp = AsyncMock()
-        token_resp.raise_for_status = MagicMock()
-        token_resp.json = AsyncMock(return_value=response_data)
-        token_resp.__aenter__ = AsyncMock(return_value=token_resp)
-        token_resp.__aexit__ = AsyncMock(return_value=False)
-        mock_session.post = MagicMock(return_value=token_resp)
+        mock_session.post = MagicMock(return_value=_token_response(response_data))
 
     @pytest.mark.asyncio
     async def test_401_retries_with_fresh_tokens(self, client, mock_session):
@@ -340,6 +409,20 @@ class TestTokenRefreshOn401:
         assert mock_session.post.call_count == 1
         headers = mock_session.get.call_args.kwargs["headers"]
         assert headers["Authorization"] == "Bearer fresh_auth"
+
+    @pytest.mark.asyncio
+    async def test_meter_data_redirects_are_not_followed(self, client, mock_session):
+        """A redirect would send the request, with its context token, to any address."""
+        mock_session.get = MagicMock(return_value=self._make_resp(status=302))
+
+        with pytest.raises(ClientResponseError) as exc_info:
+            await client.async_get_meter_data(
+                "12345678", 15, datetime(2026, 1, 1), datetime(2026, 4, 11),
+            )
+
+        assert exc_info.value.status == 302
+        assert mock_session.get.call_count == 1
+        assert mock_session.get.call_args.kwargs["allow_redirects"] is False
 
     @pytest.mark.asyncio
     async def test_non_401_4xx_not_retried(self, client, mock_session):
@@ -649,7 +732,7 @@ class TestSupplierDiscovery:
         populated = _discovery_payload(reading_date, padding=1000)
         empty = _discovery_payload()
 
-        def respond(url, *, params, headers):
+        def respond(url, *, params, headers, allow_redirects):
             start = datetime.fromisoformat(params["DateFrom"]).date()
             end = datetime.fromisoformat(params["DateTo"]).date()
             body = populated if start <= reading_date.date() < end else empty
@@ -771,6 +854,12 @@ class TestSupplierDiscovery:
             ),
             pytest.param({"Reading": True}, id="bool_reading"),
             pytest.param({"Consumption": 6.0}, id="float_consumption"),
+            # One huge hour would make every later hour too small to add to the sum.
+            pytest.param({"Consumption": Decimal(2**63 - 1)}, id="huge_consumption"),
+            pytest.param({"Consumption": Decimal(-1_000_001)}, id="huge_negative_consumption"),
+            pytest.param({"Reading": Decimal(10**9)}, id="huge_reading"),
+            pytest.param({"Reading": Decimal(-1)}, id="negative_reading"),
+            pytest.param({"Reading": Decimal("NaN")}, id="nan_reading"),
         ],
     )
     @pytest.mark.asyncio
@@ -797,6 +886,32 @@ class TestSupplierDiscovery:
 
         assert reading == Decimal("103.052")
         assert "Ignored 1 of 2 meter readings" in caplog.text
+
+    @pytest.mark.parametrize(
+        ("reading", "consumption"),
+        [
+            pytest.param("999999999.999", "1000000", id="largest"),
+            pytest.param("0", "-1000000", id="largest_correction"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_latest_reading_keeps_large_values_a_meter_can_report(
+        self, client, mock_session, reading, consumption,
+    ):
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        mock_session.get.return_value = _make_response()
+
+        with patch(
+            "custom_components.minvandforsyning.api_client.parse_dataset",
+            return_value=_readings_tables({
+                "ReadingDate": now - timedelta(hours=1),
+                "Reading": Decimal(reading),
+                "Consumption": Decimal(consumption),
+            }),
+        ):
+            latest = await client.async_get_latest_reading("12345678", 7)
+
+        assert latest == Decimal(reading)
 
     @pytest.mark.asyncio
     async def test_latest_reading_allows_a_clock_that_is_slightly_behind(
@@ -831,7 +946,7 @@ class TestSupplierDiscovery:
     ):
         populated = _discovery_payload(datetime.now(timezone.utc), reading="103.052")
         empty = _discovery_payload()
-        mock_session.get.side_effect = lambda url, *, params, headers: _make_response(
+        mock_session.get.side_effect = lambda url, *, params, headers, allow_redirects: _make_response(
             body=populated if params["SupplierID"] == "3" else empty
         )
         progress = []

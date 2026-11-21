@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from aiohttp import ClientResponseError
+from aiohttp import ClientError, ClientResponseError
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import (
     StatisticData,
@@ -25,6 +25,7 @@ from homeassistant.components.recorder.statistics import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api_client import (
@@ -51,6 +52,13 @@ _LOGGER = logging.getLogger(__name__)
 _READING_DATE_ZONE = ZoneInfo(READING_DATE_TZ)
 # How long an import waits for the recorder to store its rows.
 _RECORDER_COMMIT_TIMEOUT_SECONDS = 300
+_HISTORY_STORE_VERSION = 1
+_FAILED_HISTORY_IMPORTS = "failed_history_imports"
+
+
+def history_import_store(hass: HomeAssistant, entry_id: str) -> Store[dict[str, int]]:
+    """Return where a meter's count of failed history imports is kept."""
+    return Store(hass, _HISTORY_STORE_VERSION, f"{DOMAIN}.{entry_id}")
 
 
 def _interval_start_utc(reading_date: datetime) -> datetime:
@@ -140,7 +148,9 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         # background import task triggered by a previous refresh can't race
         # the next refresh's import or a backfill service call.
         self._stats_lock = asyncio.Lock()
-        # History imports that failed in a row; see _safe_import_readings.
+        # History imports that failed in a row. The count is stored, so that
+        # restarts don't keep the statistics empty; see _safe_import_readings.
+        self._history_store: Store[dict[str, int]] | None = None
         self._failed_history_imports = 0
         self._can_store_statistics = valid_statistic_id(self.statistic_id)
         if import_statistics and not self._can_store_statistics:
@@ -194,11 +204,15 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 f"Error fetching meter data: HTTP {err.status}",
                 retry_after=self._pause_after_rate_limit(err),
             ) from err
+        except (ClientError, TimeoutError) as err:
+            # Some of these name the request URL too.
+            raise UpdateFailed(f"Error fetching meter data: {type(err).__name__}") from err
         except Exception as err:
             raise UpdateFailed(f"Error fetching meter data: {err}") from err
 
         try:
-            readings = parse_readings(raw, now)
+            # Years of readings take seconds to parse on a small computer.
+            readings = await self.hass.async_add_executor_job(parse_readings, raw, now)
         except InvalidResponseError as err:
             raise UpdateFailed(f"Error parsing meter data: {err}") from err
 
@@ -243,17 +257,9 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         during ``[T-1, T)``. Home Assistant statistics are keyed by the *start*
         of the hour, so the bucket start is ``ReadingDate`` (as UTC) minus one
         hour. UTC has no DST, so there is no fold or spring-forward gap to
-        handle.
+        handle. A date that isn't on the hour counts toward the hour it falls in.
         """
-        start = _interval_start_utc(reading_date)
-        if start.minute or start.second or start.microsecond:
-            clamped = start.replace(minute=0, second=0, microsecond=0)
-            _LOGGER.warning(
-                "ReadingDate %s is not on the hour; clamping statistic bucket start to %s",
-                reading_date, clamped,
-            )
-            start = clamped
-        return start
+        return _interval_start_utc(reading_date).replace(minute=0, second=0, microsecond=0)
 
     async def _safe_import_readings(self, data: MinvandforsyningData) -> None:
         """Import readings into long-term statistics, logging any failure.
@@ -265,11 +271,13 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         """
         if not self._can_store_statistics:
             return
+        await self._async_load_failed_history_imports()
         try:
             imported_history = await self.async_hydrate()
         except Exception:  # noqa: BLE001 - tried again, then the latest readings are imported
-            self._failed_history_imports += 1
-            if self._failed_history_imports < HISTORY_IMPORT_ATTEMPTS:
+            failed = self._failed_history_imports + 1
+            if failed < HISTORY_IMPORT_ATTEMPTS:
+                await self._async_count_failed_history_imports(failed)
                 _LOGGER.warning(
                     "Could not import the supplier history for meter %s; "
                     "trying again at the next poll",
@@ -286,7 +294,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 exc_info=True,
             )
             imported_history = False
-        self._failed_history_imports = 0
+        await self._async_count_failed_history_imports(0)
         if imported_history:
             return
         try:
@@ -294,6 +302,43 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         except Exception:  # noqa: BLE001 - intentional safety net
             _LOGGER.warning(
                 "Failed to import long-term statistics for meter %s",
+                self._meter_number,
+                exc_info=True,
+            )
+
+    async def _async_load_failed_history_imports(self) -> None:
+        """Read the count of failed history imports once per setup."""
+        if self._history_store is not None:
+            return
+        self._history_store = history_import_store(self.hass, self.config_entry.entry_id)
+        try:
+            stored = await self._history_store.async_load()
+        except Exception:  # noqa: BLE001 - counting starts again instead
+            _LOGGER.warning(
+                "Could not read the failed history imports for meter %s",
+                self._meter_number,
+                exc_info=True,
+            )
+            return
+        count = stored.get(_FAILED_HISTORY_IMPORTS) if isinstance(stored, dict) else None
+        if isinstance(count, int) and count > 0:
+            self._failed_history_imports = count
+
+    async def _async_count_failed_history_imports(self, count: int) -> None:
+        """Store the count of failed history imports, if it changed."""
+        if count == self._failed_history_imports:
+            return
+        self._failed_history_imports = count
+        if self._history_store is None:
+            return
+        try:
+            if count:
+                await self._history_store.async_save({_FAILED_HISTORY_IMPORTS: count})
+            else:
+                await self._history_store.async_remove()
+        except Exception:  # noqa: BLE001 - the count still holds until a restart
+            _LOGGER.warning(
+                "Could not store the failed history imports for meter %s",
                 self._meter_number,
                 exc_info=True,
             )
@@ -419,10 +464,13 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 sum_so_far = Decimal(str(last.get("sum") or 0))
 
         statistics: list[StatisticData] = []
+        off_hour = 0
         for reading in data.readings:
             start_utc = self.reading_start_utc(reading.date)
             if cutoff_ts is not None and start_utc.timestamp() <= cutoff_ts:
                 continue
+            if start_utc != _interval_start_utc(reading.date):
+                off_hour += 1
             delta = reading.consumption / Decimal(LITERS_PER_CUBIC_METER)
             if reading.consumption < 0:
                 _LOGGER.debug(
@@ -437,6 +485,13 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 sum=float(sum_so_far),
             ))
 
+        if off_hour:
+            _LOGGER.warning(
+                "%d readings for meter %s are not on the hour; each counts toward "
+                "the hour it falls in",
+                off_hour,
+                self._meter_number,
+            )
         if not statistics:
             return False
 

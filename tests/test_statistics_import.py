@@ -85,6 +85,8 @@ def _make_coordinator(*, import_statistics: bool = True, meter: str = _DEFAULT_M
     end-to-end.
     """
     hass = MagicMock()
+    # Parsing runs in the executor, which here runs the job at once.
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda func, *args: func(*args))
     client = MagicMock()
     entry = MockConfigEntry(domain=DOMAIN, data={"meter_number": meter, "supplier_id": 1})
     coord = MinvandforsyningCoordinator(
@@ -837,6 +839,69 @@ async def test_deleted_statistics_get_new_history_attempts_after_a_fallback(
     assert len(await _hourly_sums(hass)) == 168
 
 
+async def _set_up_again(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Reload the meter, which sets it up like a restart does."""
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await _wait_for_statistics(hass)
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_restarts_keep_counting_failed_history_imports(
+    hass: HomeAssistant, supplier_api: MagicMock,
+) -> None:
+    """Otherwise restarting often enough would keep the statistics empty."""
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    for _ in range(HISTORY_IMPORT_ATTEMPTS - 1):
+        assert await _hourly_sums(hass) == []
+        await _set_up_again(hass, entry)
+
+    assert await _hourly_sums(hass) == pytest.approx([0.012, 0.018])
+    assert len(_history_requests(supplier_api)) == HISTORY_IMPORT_ATTEMPTS
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_failed_history_imports_count_again_once_the_history_is_stored(
+    hass: HomeAssistant, supplier_api: MagicMock,
+) -> None:
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    # The supplier answers again, and the backfill service imports the history.
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKFILL_STATISTICS, {"days": 1825}, blocking=True,
+    )
+    await _wait_for_statistics(hass)
+    await coordinator.async_refresh()
+    await _wait_for_statistics(hass)
+
+    # Later the statistics are deleted while the supplier fails again.
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    get_instance(hass).async_clear_statistics([_DEFAULT_STATISTIC_ID])
+    await async_wait_recording_done(hass)
+    for _ in range(HISTORY_IMPORT_ATTEMPTS - 1):
+        await coordinator.async_refresh()
+        await _wait_for_statistics(hass)
+
+    # The failure before the history was stored doesn't count.
+    assert await _hourly_sums(hass) == []
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_removing_a_meter_removes_its_count_of_failed_history_imports(
+    hass: HomeAssistant, supplier_api: MagicMock, hass_storage: dict[str, Any],
+) -> None:
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    assert [key for key in hass_storage if entry.entry_id in key]
+
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert not [key for key in hass_storage if entry.entry_id in key]
+
+
 def _hourly_readings(start: datetime, hours: int) -> list[tuple[datetime, str, str]]:
     """Hourly readings of 10 L each, as the supplier reports them."""
     return [
@@ -1189,6 +1254,46 @@ class TestHourAlignment:
         assert start.second == 0
         assert start.microsecond == 0
         assert any("not on the hour" in message for message in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_off_hour_readings_log_one_warning_per_import(self, caplog):
+        """A warning per reading would repeat for every reading of a 5-year history."""
+        coord = _make_coordinator()
+        data = MinvandforsyningData([
+            MeterReading(
+                date=datetime(2026, 4, 11, hour, 42),
+                reading=Decimal(100 + hour),
+                consumption=Decimal("10"),
+            )
+            for hour in range(5)
+        ])
+
+        with caplog.at_level(logging.WARNING), _RecorderPatches() as p:
+            await coord.async_import_readings(data)
+
+        assert len(p.import_stats.call_args[0][2]) == 5
+        warnings = [message for message in caplog.messages if "not on the hour" in message]
+        assert len(warnings) == 1
+        assert warnings[0].startswith("5 readings")
+
+    @pytest.mark.asyncio
+    async def test_stored_off_hour_readings_do_not_warn_again(self, caplog):
+        """Every poll gets the last 7 days again."""
+        coord = _make_coordinator()
+        reading = MeterReading(
+            date=datetime(2026, 4, 11, 10, 42), reading=Decimal("100"), consumption=Decimal("10"),
+        )
+        stored = {
+            coord.statistic_id: [{
+                "start": datetime(2026, 4, 11, 9, tzinfo=timezone.utc).timestamp(),
+                "sum": 0.01,
+            }],
+        }
+
+        with caplog.at_level(logging.WARNING), _RecorderPatches(last_stats=stored):
+            await coord.async_import_readings(MinvandforsyningData([reading]))
+
+        assert not [message for message in caplog.messages if "not on the hour" in message]
 
 
 # ---------------------------------------------------------------------------

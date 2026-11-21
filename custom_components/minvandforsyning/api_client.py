@@ -9,7 +9,13 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import NamedTuple
 
-from aiohttp import ClientError, ClientResponseError, ClientSession, ContentTypeError
+from aiohttp import (
+    ClientError,
+    ClientResponse,
+    ClientResponseError,
+    ClientSession,
+    ContentTypeError,
+)
 
 from .const import (
     API_BACKOFF_BASE_SECONDS,
@@ -45,6 +51,23 @@ _READING_COLUMNS = frozenset({COL_READING_DATE, COL_READING, COL_CONSUMPTION})
 # allows for a clock that is slightly behind.
 _EARLIEST_READING_DATE = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _FUTURE_READING_TOLERANCE = timedelta(hours=1)
+# Far above what a meter reports. One larger hour would make the running sum
+# so large that every later hour would be too small to add to it.
+_READING_LIMIT_M3 = Decimal(10**9)
+_CONSUMPTION_LIMIT_LITERS = Decimal(10**6)
+
+
+def _raise_for_status(resp: ClientResponse) -> None:
+    """Raise for an error status, and for a redirect, which isn't followed."""
+    if 300 <= resp.status < 400:
+        raise ClientResponseError(
+            resp.request_info,
+            resp.history,
+            status=resp.status,
+            message="Redirects aren't followed",
+            headers=resp.headers,
+        )
+    resp.raise_for_status()
 
 
 class InvalidResponseError(ValueError):
@@ -84,9 +107,8 @@ def parse_readings(raw: bytes, now: datetime) -> list[MeterReading]:
     """Return the hourly readings in a meter data response, in the API's order.
 
     Rows without a date, reading and consumption are skipped, and so are rows
-    with a date that can't be real or a value that isn't a decimal. Raises
-    InvalidResponseError when the response cannot be parsed or lacks the
-    readings table.
+    with a date or value that can't be real. Raises InvalidResponseError when
+    the response cannot be parsed or lacks the readings table.
     """
     try:
         tables = parse_dataset(raw)
@@ -116,6 +138,10 @@ def parse_readings(raw: bytes, now: datetime) -> list[MeterReading]:
             and isinstance(reading, Decimal)
             and isinstance(consumption, Decimal)
             and _EARLIEST_READING_DATE <= _as_utc(date) <= latest
+            and reading.is_finite()
+            and consumption.is_finite()
+            and 0 <= reading < _READING_LIMIT_M3
+            and abs(consumption) <= _CONSUMPTION_LIMIT_LITERS
         ):
             readings.append(MeterReading(date, reading, consumption))
 
@@ -171,25 +197,35 @@ class MinvandforsyningClient:
             "clientApplication": CLIENT_APPLICATION_APP,
             "methodName": METHOD_NAME,
         }
-        async with self._session.post(url, json=payload) as resp:
-            resp.raise_for_status()
+        async with self._session.post(url, json=payload, allow_redirects=False) as resp:
+            _raise_for_status(resp)
             try:
                 data = await resp.json()
             except (ContentTypeError, ValueError) as err:
                 raise TokenRequestError("The token service didn't answer with JSON") from err
 
-        if not data.get("success"):
-            errors = data.get("errors", [])
-            raise TokenRequestError(f"Token request failed: {errors}")
+        if not isinstance(data, dict) or not data.get("success"):
+            errors = data.get("errors", []) if isinstance(data, dict) else []
+            # The service's text goes into log lines, so escape and shorten it.
+            raise TokenRequestError(f"Token request failed: {errors!r:.200}")
 
-        token_data = data["payload"]
-        # Parse expiry from the response; subtract 5 min buffer
-        expiry_str = token_data["expiry"]
-        expires_at = datetime.fromisoformat(expiry_str.replace("Z", "+00:00")) - timedelta(minutes=5)
+        try:
+            token_data = data["payload"]
+            context_token = token_data["anonymousUserContextToken"]
+            easy_auth_token = token_data["easyAuthToken"]
+            if not isinstance(context_token, str) or not isinstance(easy_auth_token, str):
+                raise TypeError("The tokens aren't text")
+            expiry = datetime.fromisoformat(token_data["expiry"].replace("Z", "+00:00"))
+        except (AttributeError, KeyError, TypeError, ValueError) as err:
+            raise TokenRequestError("The token service answered in an unexpected form") from err
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        # Refresh the tokens 5 minutes before they expire.
+        expires_at = expiry - timedelta(minutes=5)
 
         self._tokens = AuthTokens(
-            context_token=token_data["anonymousUserContextToken"],
-            easy_auth_token=token_data["easyAuthToken"],
+            context_token=context_token,
+            easy_auth_token=easy_auth_token,
             expires_at=expires_at,
         )
         _LOGGER.debug("Refreshed anonymous tokens, expires at %s", expires_at)
@@ -230,7 +266,9 @@ class MinvandforsyningClient:
                 CONTEXT_TOKEN_HEADER: tokens.context_token,
             }
             try:
-                async with self._session.get(url, params=params, headers=headers) as resp:
+                async with self._session.get(
+                    url, params=params, headers=headers, allow_redirects=False,
+                ) as resp:
                     if resp.status == 401:
                         # The API no longer accepts these tokens.
                         self._tokens = None
@@ -261,9 +299,9 @@ class MinvandforsyningClient:
                         await asyncio.sleep(delay)
                         continue
                     # Success path, or final attempt on a transient status:
-                    # raise_for_status turns 4xx/5xx into ClientResponseError,
-                    # which the except below propagates.
-                    resp.raise_for_status()
+                    # this turns 3xx/4xx/5xx into ClientResponseError, which
+                    # the except below propagates.
+                    _raise_for_status(resp)
                     return await resp.read()
             except ClientResponseError:
                 # HTTP status error: fail fast. Transient statuses that reach

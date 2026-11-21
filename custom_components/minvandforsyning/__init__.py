@@ -21,7 +21,7 @@ from .const import (
     SERVICE_BACKFILL_MAX_DAYS,
     SERVICE_BACKFILL_STATISTICS,
 )
-from .coordinator import MinvandforsyningCoordinator
+from .coordinator import MinvandforsyningCoordinator, history_import_store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,6 +93,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ):
             hass.services.async_remove(DOMAIN, SERVICE_BACKFILL_STATISTICS)
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Forget what the removed meter stored about its history imports."""
+    await history_import_store(hass, entry.entry_id).async_remove()
 
 
 def _async_register_backfill_service(hass: HomeAssistant) -> None:

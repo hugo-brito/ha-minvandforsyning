@@ -1,5 +1,6 @@
 """Tests for the MinvandforsyningData coordinator data class."""
 import logging
+import threading
 from collections.abc import Generator
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -8,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
-from aiohttp import ClientResponseError, RequestInfo
+from aiohttp import ClientResponseError, ConnectionTimeoutError, RequestInfo
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -16,6 +17,7 @@ from multidict import CIMultiDict, CIMultiDictProxy
 from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed
 from yarl import URL
 
+from custom_components.minvandforsyning.api_client import parse_readings
 from custom_components.minvandforsyning.const import (
     BROKER_API_URL,
     DOMAIN,
@@ -147,6 +149,7 @@ class TestCoordinatorDateRange:
     async def test_date_to_is_tomorrow(self):
         """Coordinator must pass DateTo = now + 1 day, not DateTo = now."""
         hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(side_effect=lambda func, *args: func(*args))
         client = MagicMock()
         # Make async_get_meter_data capture the args it's called with
         captured_args = {}
@@ -317,6 +320,48 @@ async def test_a_rate_limited_setup_is_retried_when_the_api_asks(
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=125))
     await hass.async_block_till_done(wait_background_tasks=True)
     assert entry.state is ConfigEntryState.LOADED
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_connection_timeout_does_not_log_the_request(
+    hass: HomeAssistant, meter_api: MagicMock, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """aiohttp's text for it has the request URL, with the meter number."""
+    coordinator = await _set_up_meter(hass)
+    url = URL(f"{BROKER_API_URL}{METER_DATA_PATH}").with_query(MeterNumber=_METER)
+    meter_api.async_get_meter_data.side_effect = ConnectionTimeoutError(
+        f"Connection timeout to host {url}"
+    )
+
+    await coordinator.async_refresh()
+
+    errors = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
+    assert errors == [
+        f"Error fetching {DOMAIN} data: Error fetching meter data: ConnectionTimeoutError"
+    ]
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_readings_are_parsed_outside_the_event_loop(
+    hass: HomeAssistant, meter_api: MagicMock,
+) -> None:
+    """Years of history take seconds to parse on a small computer."""
+    coordinator = await _set_up_meter(hass)
+    event_loop_thread = threading.current_thread()
+    threads: list[threading.Thread] = []
+
+    def parse(raw: bytes, now: datetime) -> list[MeterReading]:
+        threads.append(threading.current_thread())
+        return parse_readings(raw, now)
+
+    # A plain function, because Home Assistant's test instance runs a mock
+    # given to the executor right away, in the event loop.
+    with patch("custom_components.minvandforsyning.coordinator.parse_readings", new=parse):
+        await coordinator.async_refresh()
+
+    assert coordinator.last_update_success
+    assert threads
+    assert event_loop_thread not in threads
 
 
 @pytest.mark.usefixtures("recorder_mock")

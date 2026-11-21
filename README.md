@@ -134,7 +134,7 @@ Deleting the integration's config entry removes the sensor entities but leaves t
 
 The integration talks to the same public API that the minvandforsyning.dk website uses. It fetches anonymous access tokens (no login required) and retrieves meter data in a binary protobuf format, which is decoded locally with a pure Python parser - zero external dependencies.
 
-If the API asks the integration to slow down, a request waits up to 30 seconds and tries again. When the API asks for a longer pause, Home Assistant waits that long before the next poll: at least the polling interval, and at most 24 hours.
+If the API asks the integration to wait 30 seconds or less, the request waits and tries again, up to 2 times. When the API asks for a longer pause, Home Assistant waits that long before the next poll: at least the polling interval, and at most 24 hours.
 
 ## Troubleshooting
 
@@ -197,7 +197,7 @@ data:
 
 ### Reporting issues
 
-Debug and warning log lines include your meter number. If you're sharing logs in a GitHub issue, replace all occurrences of your meter number with `<METER>` first.
+Log lines can include your meter number. If you're sharing logs in a GitHub issue, replace all occurrences of your meter number with `<METER>` first.
 
 ## Adding a supplier to the list
 
