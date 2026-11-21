@@ -1,16 +1,21 @@
 """Tests for the MinVandforsyning API client."""
+import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
-from aiohttp import ClientResponseError
+from aiohttp import ClientResponseError, ContentTypeError
 
 from custom_components.minvandforsyning.api_client import (
     AuthTokens,
     MinvandforsyningClient,
+    SupplierMatch,
+    TokenRequestError,
 )
+from custom_components.minvandforsyning.const import SUPPLIER_SCAN_DELAY_SECONDS
+from custom_components.minvandforsyning.protobuf_parser import DataColumn, DataTable
 
 from .payloads import supplier_response
 
@@ -30,11 +35,21 @@ def _make_response(*, status=200, body=b""):
     return resp
 
 
-def _discovery_payload(reading_date=None, *, padding=0):
-    """A supplier response with an optional zero-valued meter reading."""
-    readings = [] if reading_date is None else [(reading_date, "0", "0")]
+def _discovery_payload(reading_date=None, *, padding=0, reading="0"):
+    """A supplier response with an optional meter reading, zero by default."""
+    readings = [] if reading_date is None else [(reading_date, reading, "0")]
     extra = [("Padding" + "x" * padding, 1)] if padding else []
     return supplier_response(readings, extra_columns=extra)
+
+
+def _readings_tables(*rows: dict) -> list[DataTable]:
+    """Parsed tables with these rows in the readings table, whatever their types."""
+    readings = DataTable()
+    readings.columns = [
+        DataColumn(name, 0) for name in ("ReadingDate", "Reading", "Consumption")
+    ]
+    readings.rows = list(rows)
+    return [*(DataTable() for _ in range(6)), readings]
 
 
 class TestAuthTokens:
@@ -128,7 +143,23 @@ class TestMinvandforsyningClient:
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         mock_session.post = MagicMock(return_value=mock_resp)
 
-        with pytest.raises(RuntimeError, match="Token request failed"):
+        with pytest.raises(TokenRequestError, match="Token request failed"):
+            await client.async_get_tokens()
+
+    @pytest.mark.asyncio
+    async def test_get_tokens_without_json_is_a_token_failure(self, client, mock_session):
+        """An error page with status 200 is no HTTP error, and reporting it as one misleads."""
+        mock_resp = AsyncMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(side_effect=ContentTypeError(
+            MagicMock(), (), status=200,
+            message="Attempt to decode JSON with unexpected mimetype: text/html",
+        ))
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+        mock_session.post = MagicMock(return_value=mock_resp)
+
+        with pytest.raises(TokenRequestError):
             await client.async_get_tokens()
 
     @pytest.mark.asyncio
@@ -171,7 +202,7 @@ class TestMinvandforsyningClient:
         mock_session.get = MagicMock(return_value=_make_response(status=429))
 
         with pytest.raises(ClientResponseError) as exc_info:
-            await client.async_discover_supplier_id("12345678")
+            await client.async_find_supplier("12345678")
         assert exc_info.value.status == 429
         assert mock_session.get.call_count == 1
 
@@ -282,6 +313,33 @@ class TestTokenRefreshOn401:
 
         assert any("401" in r.message for r in caplog.records)
         assert any(r.levelno == logging.WARNING for r in caplog.records if "401" in r.message)
+
+    @pytest.mark.asyncio
+    async def test_401_on_the_last_attempt_is_the_error(self, client, mock_session):
+        """Without an attempt left, the 401 is raised and the next request gets new tokens."""
+        mock_session.get = MagicMock(side_effect=[
+            self._make_resp(status=503),
+            self._make_resp(status=503),
+            self._make_resp(status=401),
+        ])
+
+        with patch(
+            "custom_components.minvandforsyning.api_client.asyncio.sleep", AsyncMock(),
+        ), pytest.raises(ClientResponseError) as exc_info:
+            await client.async_get_meter_data(
+                "12345678", 15, datetime(2026, 1, 1), datetime(2026, 4, 11),
+            )
+
+        assert exc_info.value.status == 401
+        assert mock_session.get.call_count == 3
+        self._set_fresh_tokens(client, mock_session)
+        mock_session.get = MagicMock(return_value=self._make_resp(body=b"\x0b"))
+        await client.async_get_meter_data(
+            "12345678", 15, datetime(2026, 1, 1), datetime(2026, 4, 11),
+        )
+        assert mock_session.post.call_count == 1
+        headers = mock_session.get.call_args.kwargs["headers"]
+        assert headers["Authorization"] == "Bearer fresh_auth"
 
     @pytest.mark.asyncio
     async def test_non_401_4xx_not_retried(self, client, mock_session):
@@ -463,10 +521,11 @@ class TestTransientErrorRetry:
         assert first_delay >= 7.0
 
     @pytest.mark.asyncio
-    async def test_429_retry_after_is_capped(self, client, mock_session, no_sleep):
-        """Setup's first refresh waits for these retries, so a day is too long."""
+    async def test_429_retry_after_of_30_seconds_is_waited_for(
+        self, client, mock_session, no_sleep,
+    ):
         fail_resp = self._make_resp(status=429)
-        fail_resp.headers = {"Retry-After": "86400"}
+        fail_resp.headers = {"Retry-After": "30"}
         ok_resp = self._make_resp(status=200, body=b"\x0b")
         mock_session.get = MagicMock(side_effect=[fail_resp, ok_resp])
 
@@ -475,6 +534,24 @@ class TestTransientErrorRetry:
             datetime(2026, 1, 1), datetime(2026, 4, 11),
         )
         assert [call.args[0] for call in no_sleep.call_args_list] == [30.0]
+
+    @pytest.mark.asyncio
+    async def test_429_with_a_longer_retry_after_is_raised_at_once(
+        self, client, mock_session, no_sleep,
+    ):
+        """Trying again before the API's pause ends would only get another 429."""
+        fail_resp = self._make_resp(status=429)
+        fail_resp.headers = {"Retry-After": "31"}
+        mock_session.get = MagicMock(return_value=fail_resp)
+
+        with pytest.raises(ClientResponseError) as exc_info:
+            await client.async_get_meter_data(
+                "12345678", 15,
+                datetime(2026, 1, 1), datetime(2026, 4, 11),
+            )
+        assert exc_info.value.status == 429
+        assert mock_session.get.call_count == 1
+        no_sleep.assert_not_called()
 
     @pytest.mark.parametrize(
         "retry_after",
@@ -537,15 +614,15 @@ class TestSupplierDiscovery:
         with patch(
             "custom_components.minvandforsyning.api_client.asyncio.sleep",
             AsyncMock(),
-        ):
-            yield
+        ) as sleep:
+            yield sleep
 
     @pytest.mark.asyncio
     async def test_zero_reading_is_a_match(self, client, mock_session):
         body = _discovery_payload(datetime.now(timezone.utc))
         mock_session.get.return_value = _make_response(body=body)
 
-        assert await client.async_discover_supplier_id("12345678") == 1
+        assert await client.async_find_supplier("12345678") == SupplierMatch(1, Decimal("0"))
         assert mock_session.get.call_count == 1
 
     @pytest.mark.asyncio
@@ -559,7 +636,7 @@ class TestSupplierDiscovery:
             _make_response(body=match),
         ]
 
-        assert await client.async_discover_supplier_id("12345678") == 2
+        assert (await client.async_find_supplier("12345678")).supplier_id == 2
         assert mock_session.get.call_count == 2
 
     @pytest.mark.parametrize("reading_age_days", [0, 5])
@@ -579,7 +656,7 @@ class TestSupplierDiscovery:
 
         mock_session.get.side_effect = respond
 
-        assert await client.async_discover_supplier_id("12345678") == 1
+        assert (await client.async_find_supplier("12345678")).supplier_id == 1
         assert mock_session.get.call_count == 1
 
     @pytest.mark.asyncio
@@ -591,11 +668,11 @@ class TestSupplierDiscovery:
             _make_response(body=_discovery_payload(datetime.now(timezone.utc))),
         ]
 
-        result = await client.async_discover_supplier_id(
+        result = await client.async_find_supplier(
             "12345678", scan_start=501, scan_end=503,
         )
 
-        assert result == 502
+        assert result.supplier_id == 502
         assert [
             call.kwargs["params"]["SupplierID"]
             for call in mock_session.get.call_args_list
@@ -607,7 +684,7 @@ class TestSupplierDiscovery:
         self, client, mock_session, scan_start, scan_end,
     ):
         with pytest.raises(ValueError):
-            await client.async_discover_supplier_id(
+            await client.async_find_supplier(
                 "12345678", scan_start=scan_start, scan_end=scan_end,
             )
         mock_session.get.assert_not_called()
@@ -620,7 +697,7 @@ class TestSupplierDiscovery:
         mock_session.get.return_value = _make_response(status=status)
 
         with pytest.raises(ClientResponseError) as exc_info:
-            await client.async_discover_supplier_id("12345678")
+            await client.async_find_supplier("12345678")
 
         assert exc_info.value.status == status
         assert {
@@ -643,9 +720,9 @@ class TestSupplierDiscovery:
             client, "async_get_tokens",
             AsyncMock(side_effect=[client._tokens, fresh]),
         ):
-            result = await client.async_discover_supplier_id("12345678")
+            result = await client.async_find_supplier("12345678")
 
-        assert result == 1
+        assert result.supplier_id == 1
         calls = mock_session.get.call_args_list
         assert [call.kwargs["params"]["SupplierID"] for call in calls] == ["1", "1"]
         assert calls[1].kwargs["headers"]["Authorization"] == "Bearer fresh_auth"
@@ -663,7 +740,7 @@ class TestSupplierDiscovery:
         mock_session.get.return_value = _make_response(body=body)
 
         with pytest.raises(ValueError):
-            await client.async_discover_supplier_id("12345678")
+            await client.async_find_supplier("12345678")
         assert mock_session.get.call_count == 1
 
     @pytest.mark.asyncio
@@ -681,18 +758,84 @@ class TestSupplierDiscovery:
         assert params["DateFrom"] == (today - timedelta(days=7)).isoformat()
         assert params["DateTo"] == (today + timedelta(days=1)).isoformat()
 
+    @pytest.mark.parametrize(
+        "newest",
+        [
+            pytest.param({"ReadingDate": datetime.max}, id="far_future"),
+            pytest.param({"ReadingDate": timedelta(hours=2)}, id="two_hours_ahead"),
+            pytest.param({"ReadingDate": datetime.min}, id="before_1970"),
+            pytest.param({"ReadingDate": "2026-11-20T10:00:00"}, id="text_date"),
+            pytest.param(
+                {"Reading": "9 m³ [Check your meter](https://example.com)"}, id="text_reading",
+            ),
+            pytest.param({"Reading": True}, id="bool_reading"),
+            pytest.param({"Consumption": 6.0}, id="float_consumption"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_latest_reading_skips_rows_with_an_unexpected_date_or_value(
+        self, client, mock_session, caplog, newest,
+    ):
+        """A row like this would show up in setup, or stop statistics at its date."""
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        valid = {
+            "ReadingDate": now - timedelta(hours=1),
+            "Reading": Decimal("103.052"),
+            "Consumption": Decimal("6"),
+        }
+        broken = {**valid, "Reading": Decimal("999"), "Consumption": Decimal("1"), **newest}
+        if isinstance(broken["ReadingDate"], timedelta):
+            broken["ReadingDate"] = now + broken["ReadingDate"]
+        mock_session.get.return_value = _make_response()
+
+        with patch(
+            "custom_components.minvandforsyning.api_client.parse_dataset",
+            return_value=_readings_tables(valid, broken),
+        ), caplog.at_level(logging.WARNING):
+            reading = await client.async_get_latest_reading("12345678", 7)
+
+        assert reading == Decimal("103.052")
+        assert "Ignored 1 of 2 meter readings" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_latest_reading_allows_a_clock_that_is_slightly_behind(
+        self, client, mock_session,
+    ):
+        """Readings are never from the future, unless this computer's clock is behind."""
+        ahead = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=30)
+        mock_session.get.return_value = _make_response()
+
+        with patch(
+            "custom_components.minvandforsyning.api_client.parse_dataset",
+            return_value=_readings_tables(
+                {"ReadingDate": ahead, "Reading": Decimal("103.052"), "Consumption": Decimal("6")},
+            ),
+        ):
+            reading = await client.async_get_latest_reading("12345678", 7)
+
+        assert reading == Decimal("103.052")
+
+    @pytest.mark.asyncio
+    async def test_search_pauses_between_requests(self, client, mock_session, no_sleep):
+        mock_session.get.return_value = _make_response(body=_discovery_payload())
+
+        assert await client.async_find_supplier("12345678", scan_start=1, scan_end=3) is None
+
+        assert mock_session.get.call_count == 3
+        assert no_sleep.await_args_list == [call(SUPPLIER_SCAN_DELAY_SECONDS)] * 2
+
     @pytest.mark.asyncio
     async def test_known_suppliers_are_tried_first_with_progress(
         self, client, mock_session,
     ):
-        populated = _discovery_payload(datetime.now(timezone.utc))
+        populated = _discovery_payload(datetime.now(timezone.utc), reading="103.052")
         empty = _discovery_payload()
         mock_session.get.side_effect = lambda url, *, params, headers: _make_response(
             body=populated if params["SupplierID"] == "3" else empty
         )
         progress = []
 
-        result = await client.async_discover_supplier_id(
+        result = await client.async_find_supplier(
             "12345678",
             scan_start=1,
             scan_end=3,
@@ -700,7 +843,8 @@ class TestSupplierDiscovery:
             on_progress=lambda checked, total: progress.append((checked, total)),
         )
 
-        assert result == 3
+        # The match carries the reading it found, so setup can show it.
+        assert result == SupplierMatch(3, Decimal("103.052"))
         assert [
             call.kwargs["params"]["SupplierID"]
             for call in mock_session.get.call_args_list

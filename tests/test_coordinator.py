@@ -1,14 +1,31 @@
 """Tests for the MinvandforsyningData coordinator data class."""
+import logging
+from collections.abc import Generator
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
-from pytest_homeassistant.common import MockConfigEntry
+from aiohttp import ClientResponseError, RequestInfo
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
+from multidict import CIMultiDict, CIMultiDictProxy
+from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed
+from yarl import URL
 
-from custom_components.minvandforsyning.const import DOMAIN, READING_DATE_TZ
+from custom_components.minvandforsyning.const import (
+    BROKER_API_URL,
+    DOMAIN,
+    METER_DATA_PATH,
+    READING_DATE_TZ,
+)
 from custom_components.minvandforsyning.coordinator import MeterReading, MinvandforsyningCoordinator, MinvandforsyningData
+
+_METER = "12345678"
+_FIXTURE = Path(__file__).parent / "fixtures" / "meter_data.bin"
 
 
 def _reading(year: int, month: int, day: int, hour: int, total: str, consumption: str) -> MeterReading:
@@ -175,3 +192,141 @@ def test_coordinator_belongs_to_its_config_entry():
     )
 
     assert coordinator.config_entry is entry
+
+
+def _rate_limited(retry_after: int) -> ClientResponseError:
+    """A 429 as aiohttp raises it, with the request's URL and the API's pause."""
+    url = URL(f"{BROKER_API_URL}{METER_DATA_PATH}").with_query(
+        MeterNumber=_METER, SupplierID="1",
+    )
+    return ClientResponseError(
+        RequestInfo(url, "GET", CIMultiDictProxy(CIMultiDict()), url),
+        (),
+        status=429,
+        message="Too Many Requests",
+        headers=CIMultiDictProxy(CIMultiDict({"Retry-After": str(retry_after)})),
+    )
+
+
+@pytest.fixture
+def meter_api() -> Generator[MagicMock]:
+    """Mock the supplier API client that the integration creates."""
+    with patch(
+        "custom_components.minvandforsyning.MinvandforsyningClient", autospec=True,
+    ) as client_cls:
+        client_cls.return_value.async_get_meter_data.return_value = _FIXTURE.read_bytes()
+        yield client_cls.return_value
+
+
+def _add_meter(hass: HomeAssistant) -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=_METER,
+        data={"meter_number": _METER, "supplier_id": 1},
+        options={"import_statistics": False},
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def _set_up_meter(hass: HomeAssistant) -> MinvandforsyningCoordinator:
+    entry = _add_meter(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return hass.data[DOMAIN][entry.entry_id]
+
+
+async def _rate_limit_a_poll(
+    hass: HomeAssistant, meter_api: MagicMock, retry_after: int,
+) -> int:
+    """Poll once while the API limits requests; return the requests so far."""
+    coordinator = await _set_up_meter(hass)
+    meter_api.async_get_meter_data.side_effect = _rate_limited(retry_after)
+    await coordinator.async_refresh()
+    assert not coordinator.last_update_success
+    meter_api.async_get_meter_data.side_effect = None
+    return meter_api.async_get_meter_data.await_count
+
+
+async def _requests_after(hass: HomeAssistant, meter_api: MagicMock, delay: timedelta) -> int:
+    async_fire_time_changed(hass, dt_util.utcnow() + delay)
+    # Scheduled polls run as background tasks.
+    await hass.async_block_till_done(wait_background_tasks=True)
+    return meter_api.async_get_meter_data.await_count
+
+
+@pytest.mark.usefixtures("recorder_mock")
+@pytest.mark.parametrize(
+    ("retry_after", "quiet_for", "polled_after"),
+    [
+        pytest.param(
+            7200, timedelta(hours=1, minutes=1), timedelta(hours=2, minutes=1),
+            id="longer_than_the_interval",
+        ),
+        pytest.param(
+            30 * 86400, timedelta(hours=23), timedelta(hours=24, minutes=1),
+            id="at_most_a_day",
+        ),
+    ],
+)
+async def test_a_rate_limited_poll_waits_as_long_as_the_api_asks(
+    hass: HomeAssistant,
+    meter_api: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    retry_after: int,
+    quiet_for: timedelta,
+    polled_after: timedelta,
+) -> None:
+    requests = await _rate_limit_a_poll(hass, meter_api, retry_after)
+
+    assert await _requests_after(hass, meter_api, quiet_for) == requests
+    assert await _requests_after(hass, meter_api, polled_after) == requests + 1
+    # Home Assistant logs the failure, without the request and its meter number.
+    errors = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
+    assert errors == [f"Error fetching {DOMAIN} data: Error fetching meter data: HTTP 429"]
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_short_rate_limit_does_not_poll_sooner_than_usual(
+    hass: HomeAssistant, meter_api: MagicMock,
+) -> None:
+    """Home Assistant polls again after the API's pause instead of the interval."""
+    requests = await _rate_limit_a_poll(hass, meter_api, 120)
+
+    assert await _requests_after(hass, meter_api, timedelta(minutes=59)) == requests
+    assert await _requests_after(hass, meter_api, timedelta(hours=1, minutes=1)) == requests + 1
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_rate_limited_setup_is_retried_when_the_api_asks(
+    hass: HomeAssistant, meter_api: MagicMock,
+) -> None:
+    meter_api.async_get_meter_data.side_effect = _rate_limited(120)
+    entry = _add_meter(hass)
+
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    # The integrations page shows this.
+    assert entry.reason == "Error fetching meter data: HTTP 429"
+    meter_api.async_get_meter_data.side_effect = None
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=110))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    # Setup retries run as background tasks.
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=125))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert entry.state is ConfigEntryState.LOADED
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_poll_without_the_reading_columns_fails(
+    hass: HomeAssistant, meter_api: MagicMock,
+) -> None:
+    """Setup rejects a response like this, so a poll reports it too."""
+    coordinator = await _set_up_meter(hass)
+    meter_api.async_get_meter_data.return_value = b"\x0b\x0c" * 7
+
+    await coordinator.async_refresh()
+
+    assert not coordinator.last_update_success

@@ -2,14 +2,13 @@
 
 Covers:
 - Coordinator accepts custom scan_interval
-- Options flow validation and persistence
 - Update listener triggers reload on options change
+
+The options form itself is tested through Home Assistant in test_config_flow.py.
 """
 from datetime import timedelta
 from unittest.mock import MagicMock
 
-import pytest
-import voluptuous as vol
 from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.minvandforsyning.const import (
@@ -65,70 +64,8 @@ class TestCoordinatorScanInterval:
 
 
 # ---------------------------------------------------------------------------
-# Options flow: validation and storage
+# Options flow: registration
 # ---------------------------------------------------------------------------
-
-class TestOptionsFlowSchema:
-    """Options flow must validate minutes input and store seconds.
-
-    The schema validates minutes; conversion to seconds happens in async_step_init.
-    """
-
-    def _get_options_schema(self, current_seconds: int = DEFAULT_SCAN_INTERVAL):
-        """Build the options schema the same way the flow does."""
-        from custom_components.minvandforsyning.config_flow import (
-            MinvandforsyningOptionsFlow,
-        )
-        return vol.Schema({
-            vol.Required(
-                CONF_SCAN_INTERVAL,
-                default=current_seconds // 60,
-            ): vol.All(
-                vol.Coerce(int),
-                vol.Range(min=MIN_SCAN_INTERVAL // 60, max=MAX_SCAN_INTERVAL // 60),
-            ),
-        })
-
-    def test_valid_30_minutes(self):
-        schema = self._get_options_schema()
-        result = schema({CONF_SCAN_INTERVAL: 30})
-        assert result[CONF_SCAN_INTERVAL] == 30
-
-    def test_valid_120_minutes_default(self):
-        schema = self._get_options_schema()
-        result = schema({CONF_SCAN_INTERVAL: 120})
-        assert result[CONF_SCAN_INTERVAL] == 120
-
-    def test_valid_1440_minutes_max(self):
-        schema = self._get_options_schema()
-        result = schema({CONF_SCAN_INTERVAL: 1440})
-        assert result[CONF_SCAN_INTERVAL] == 1440
-
-    def test_valid_10_minutes_min(self):
-        schema = self._get_options_schema()
-        result = schema({CONF_SCAN_INTERVAL: 10})
-        assert result[CONF_SCAN_INTERVAL] == 10
-
-    def test_rejects_below_minimum(self):
-        schema = self._get_options_schema()
-        with pytest.raises(vol.MultipleInvalid):
-            schema({CONF_SCAN_INTERVAL: 5})
-
-    def test_rejects_above_maximum(self):
-        schema = self._get_options_schema()
-        with pytest.raises(vol.MultipleInvalid):
-            schema({CONF_SCAN_INTERVAL: 2000})
-
-    def test_rejects_zero(self):
-        schema = self._get_options_schema()
-        with pytest.raises(vol.MultipleInvalid):
-            schema({CONF_SCAN_INTERVAL: 0})
-
-    def test_rejects_negative(self):
-        schema = self._get_options_schema()
-        with pytest.raises(vol.MultipleInvalid):
-            schema({CONF_SCAN_INTERVAL: -10})
-
 
 class TestOptionsFlowHandler:
     """The OptionsFlow class must exist and be registered."""
@@ -180,44 +117,3 @@ class TestConstants:
 
     def test_conf_key(self):
         assert CONF_SCAN_INTERVAL == "scan_interval"
-
-
-# ---------------------------------------------------------------------------
-# Options flow: import_statistics field round-trip
-# ---------------------------------------------------------------------------
-
-class TestImportStatisticsOption:
-    """The options flow must persist import_statistics alongside scan_interval."""
-
-    def _get_options_schema(self):
-        """Build a schema matching the one used by the options flow."""
-        from custom_components.minvandforsyning.const import (
-            CONF_IMPORT_STATISTICS,
-            DEFAULT_IMPORT_STATISTICS,
-        )
-        return vol.Schema({
-            vol.Required(CONF_SCAN_INTERVAL, default=60): vol.All(
-                vol.Coerce(int),
-                vol.Range(min=MIN_SCAN_INTERVAL // 60, max=MAX_SCAN_INTERVAL // 60),
-            ),
-            vol.Required(CONF_IMPORT_STATISTICS, default=DEFAULT_IMPORT_STATISTICS): bool,
-        })
-
-    def test_import_statistics_accepts_true(self):
-        from custom_components.minvandforsyning.const import CONF_IMPORT_STATISTICS
-        schema = self._get_options_schema()
-        result = schema({CONF_SCAN_INTERVAL: 60, CONF_IMPORT_STATISTICS: True})
-        assert result[CONF_IMPORT_STATISTICS] is True
-
-    def test_import_statistics_accepts_false(self):
-        from custom_components.minvandforsyning.const import CONF_IMPORT_STATISTICS
-        schema = self._get_options_schema()
-        result = schema({CONF_SCAN_INTERVAL: 60, CONF_IMPORT_STATISTICS: False})
-        assert result[CONF_IMPORT_STATISTICS] is False
-
-    def test_default_is_true(self):
-        from custom_components.minvandforsyning.const import (
-            CONF_IMPORT_STATISTICS,
-            DEFAULT_IMPORT_STATISTICS,
-        )
-        assert DEFAULT_IMPORT_STATISTICS is True

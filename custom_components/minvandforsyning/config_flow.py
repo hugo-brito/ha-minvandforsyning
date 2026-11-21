@@ -19,7 +19,12 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from .api_client import InvalidResponseError, MinvandforsyningClient
+from .api_client import (
+    InvalidResponseError,
+    MinvandforsyningClient,
+    SupplierMatch,
+    TokenRequestError,
+)
 from .const import (
     CONF_IMPORT_STATISTICS,
     CONF_SCAN_INTERVAL,
@@ -62,8 +67,7 @@ def _error_key(err: Exception) -> str:
         return "rate_limited"
     if isinstance(err, InvalidResponseError):
         return "invalid_response"
-    # RuntimeError covers failed anonymous token requests.
-    if isinstance(err, (ClientError, asyncio.TimeoutError, RuntimeError)):
+    if isinstance(err, (ClientError, asyncio.TimeoutError, TokenRequestError)):
         return "cannot_connect"
     return "unknown"
 
@@ -115,7 +119,7 @@ class MinvandforsyningConfigFlow(ConfigFlow, domain=DOMAIN):
         self._scan_end = SUPPLIER_ID_SCAN_MAX
         self._scan_known_suppliers = True
         self._offer_supplier_list = True
-        self._discovery_task: asyncio.Task[int | None] | None = None
+        self._discovery_task: asyncio.Task[SupplierMatch | None] | None = None
         self._discovery_error: str | None = None
         self._progress: float | None = None
 
@@ -265,7 +269,7 @@ class MinvandforsyningConfigFlow(ConfigFlow, domain=DOMAIN):
 
         task, self._discovery_task = self._discovery_task, None
         try:
-            supplier_id = task.result()
+            match = task.result()
         except Exception as err:  # noqa: BLE001 - reported by discover_failed
             self._discovery_error = _error_key(err)
             if self._discovery_error == "unknown":
@@ -274,10 +278,11 @@ class MinvandforsyningConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.debug("Supplier search failed", exc_info=True)
             return self.async_show_progress_done(next_step_id="discover_failed")
 
-        if supplier_id is None:
+        if match is None:
             return self.async_show_progress_done(next_step_id="discover_failed")
 
-        self._supplier_id = supplier_id
+        self._supplier_id = match.supplier_id
+        self._latest_reading = str(match.reading)
         return self.async_show_progress_done(next_step_id="confirm")
 
     @callback
@@ -289,26 +294,15 @@ class MinvandforsyningConfigFlow(ConfigFlow, domain=DOMAIN):
             progress_task=self._discovery_task,
         )
 
-    async def _async_discover_supplier(self) -> int | None:
-        """Run the supplier search and fetch a preview reading for a match."""
-        client = self._get_client()
-        supplier_id = await client.async_discover_supplier_id(
+    async def _async_discover_supplier(self) -> SupplierMatch | None:
+        """Search the flow's supplier IDs for the meter."""
+        return await self._get_client().async_find_supplier(
             self._meter_number,
             scan_start=self._scan_start,
             scan_end=self._scan_end,
             candidates=list(KNOWN_SUPPLIERS) if self._scan_known_suppliers else [],
             on_progress=self._report_progress,
         )
-        if supplier_id is not None:
-            try:
-                reading = await client.async_get_latest_reading(
-                    self._meter_number, supplier_id, retry_rate_limited=False,
-                )
-            except Exception:  # noqa: BLE001 - the preview is informational
-                _LOGGER.debug("Could not fetch preview reading", exc_info=True)
-                reading = None
-            self._latest_reading = "?" if reading is None else str(reading)
-        return supplier_id
 
     @callback
     def _report_progress(self, checked: int, total: int) -> None:

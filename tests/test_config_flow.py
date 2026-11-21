@@ -20,13 +20,14 @@ from homeassistant.data_entry_flow import (
     InvalidData,
 )
 from pytest_homeassistant.common import MockConfigEntry
-from pytest_homeassistant.test_util.aiohttp import (
-    AiohttpClientMocker,
-    AiohttpClientMockResponse,
-)
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 from yarl import URL
 
-from custom_components.minvandforsyning.api_client import InvalidResponseError
+from custom_components.minvandforsyning.api_client import (
+    InvalidResponseError,
+    SupplierMatch,
+    TokenRequestError,
+)
 from custom_components.minvandforsyning.const import (
     BROKER_API_URL,
     DOMAIN,
@@ -35,8 +36,6 @@ from custom_components.minvandforsyning.const import (
     TOKEN_PATH,
 )
 from custom_components.minvandforsyning.suppliers import KNOWN_SUPPLIERS
-
-from .payloads import supplier_response
 
 METER = "12345678"
 METER_DATA_URL = URL(f"{BROKER_API_URL}{METER_DATA_PATH}")
@@ -89,7 +88,7 @@ def client() -> Generator[MagicMock]:
     ) as client_cls:
         client = client_cls.return_value
         client.async_get_latest_reading.return_value = Decimal("103.052")
-        client.async_discover_supplier_id.return_value = None
+        client.async_find_supplier.return_value = None
         yield client
 
 
@@ -294,12 +293,15 @@ async def test_not_listed_returns_to_the_other_options(hass: HomeAssistant) -> N
         pytest.param(ClientConnectionError(), {"base": "cannot_connect"}, id="no_connection"),
         pytest.param(TimeoutError(), {"base": "cannot_connect"}, id="timeout"),
         pytest.param(
-            RuntimeError("Token request failed"), {"base": "cannot_connect"}, id="no_token",
+            TokenRequestError("Token request failed: []"), {"base": "cannot_connect"},
+            id="no_token",
         ),
         pytest.param(
             InvalidResponseError("bad payload"), {"base": "invalid_response"}, id="bad_payload",
         ),
         pytest.param(KeyError("payload"), {"base": "unknown"}, id="unexpected"),
+        # A bug, not a connection problem, so it's logged as one.
+        pytest.param(RuntimeError("bug"), {"base": "unknown"}, id="runtime_error"),
     ],
 )
 async def test_supplier_id_errors_can_be_retried(
@@ -402,9 +404,9 @@ async def test_search_reports_progress_and_offers_the_next_range(
         # Updates are rounded, and an unchanged value sends no update.
         for checked in (1, 2, 2, 3):
             on_progress(checked, 3)
-        return 612 if scan_start == 501 else None
+        return SupplierMatch(612, Decimal("103.052")) if scan_start == 501 else None
 
-    client.async_discover_supplier_id.side_effect = search
+    client.async_find_supplier.side_effect = search
 
     result = await _finish_search(hass, await _choose(hass, "discover_supplier"))
     assert result["type"] is FlowResultType.MENU
@@ -430,7 +432,7 @@ async def test_search_reports_progress_and_offers_the_next_range(
     assert result["description"] == "share_supplier"
     assert [
         (call.kwargs["scan_start"], call.kwargs["scan_end"], call.kwargs["candidates"])
-        for call in client.async_discover_supplier_id.await_args_list
+        for call in client.async_find_supplier.await_args_list
     ] == [(1, 500, [42]), (501, 1000, [])]
     assert progress == [0.33, 0.67, 1.0, 0.33, 0.67, 1.0]
 
@@ -445,7 +447,7 @@ async def test_each_further_search_checks_the_next_500_ids(
 
     assert [
         (call.kwargs["scan_start"], call.kwargs["scan_end"])
-        for call in client.async_discover_supplier_id.await_args_list
+        for call in client.async_find_supplier.await_args_list
     ] == [(1, 500), (501, 1000), (1001, 1500)]
     assert result["step_id"] == "discover_failed"
     assert result["menu_options"] == ["discover_next", "manual_supplier"]
@@ -460,16 +462,16 @@ async def test_search_can_find_a_listed_supplier(
 ) -> None:
     async def search(meter_number, **kwargs):
         await asyncio.sleep(0)
-        return 42
+        return SupplierMatch(42, Decimal("7.5"))
 
-    client.async_discover_supplier_id.side_effect = search
-    client.async_get_latest_reading.side_effect = ClientConnectionError()
+    client.async_find_supplier.side_effect = search
 
     result = await _finish_search(hass, await _choose(hass, "discover_supplier"))
 
     assert result["step_id"] == "confirm_known"
-    # The search already saw readings, so a failed preview doesn't stop setup.
-    assert result["description_placeholders"]["latest_reading"] == "?"
+    # The search already has the reading, so it doesn't ask the API again.
+    assert result["description_placeholders"]["latest_reading"] == "7.5"
+    client.async_get_latest_reading.assert_not_awaited()
     result = await _configure(hass, result, {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["result"].unique_id == METER
@@ -480,38 +482,12 @@ async def test_search_can_find_a_listed_supplier(
 async def test_a_search_that_finishes_at_once_still_asks_for_confirmation(
     hass: HomeAssistant, client: MagicMock,
 ) -> None:
-    client.async_discover_supplier_id.return_value = 42
+    client.async_find_supplier.return_value = SupplierMatch(42, Decimal("103.052"))
 
     result = await _finish_search(hass, await _choose(hass, "discover_supplier"))
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "confirm_known"
-
-
-async def test_a_rate_limited_preview_does_not_hold_up_the_search(
-    hass: HomeAssistant, api: AiohttpClientMocker, long_waits: list[float],
-) -> None:
-    reading_date = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
-    answers = [
-        AiohttpClientMockResponse(
-            "get", METER_DATA_URL, response=supplier_response([(reading_date, "103.052", "6")]),
-        ),
-        AiohttpClientMockResponse(
-            "get", METER_DATA_URL, status=429, headers={"Retry-After": "86400"},
-        ),
-    ]
-
-    async def meter_data(method: str, url: URL, data: Any) -> AiohttpClientMockResponse:
-        # The search finds the listed supplier, then the preview is rate limited.
-        return answers.pop(0) if len(answers) > 1 else answers[0]
-
-    api.get(METER_DATA_URL, side_effect=meter_data)
-
-    result = await _finish_search(hass, await _choose(hass, "discover_supplier"))
-
-    assert result["step_id"] == "confirm_known"
-    assert result["description_placeholders"]["latest_reading"] == "?"
-    assert long_waits == []
 
 
 @pytest.mark.parametrize(
@@ -530,7 +506,7 @@ async def test_search_errors_abort(
         await asyncio.sleep(0)
         raise error
 
-    client.async_discover_supplier_id.side_effect = search
+    client.async_find_supplier.side_effect = search
 
     result = await _finish_search(hass, await _choose(hass, "discover_supplier"))
 
@@ -552,7 +528,7 @@ async def test_closing_the_dialog_cancels_the_search(
             cancelled.set()
             raise
 
-    client.async_discover_supplier_id.side_effect = search
+    client.async_find_supplier.side_effect = search
     result = await _choose(hass, "discover_supplier")
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     # Bounded waits, so a search that keeps running fails the test instead of
@@ -564,3 +540,38 @@ async def test_closing_the_dialog_cancels_the_search(
 
     async with asyncio.timeout(10):
         await cancelled.wait()
+
+
+async def _start_options(hass: HomeAssistant) -> tuple[MockConfigEntry, FlowResult]:
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=METER, data={"meter_number": METER, "supplier_id": 42},
+    )
+    entry.add_to_hass(hass)
+    return entry, await hass.config_entries.options.async_init(entry.entry_id)
+
+
+@pytest.mark.parametrize(("minutes", "seconds"), [(10, 600), (1440, 86400)])
+async def test_options_store_the_polling_interval_in_seconds(
+    hass: HomeAssistant, minutes: int, seconds: int,
+) -> None:
+    entry, result = await _start_options(hass)
+    assert result["type"] is FlowResultType.FORM
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"scan_interval": minutes, "import_statistics": False},
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {"scan_interval": seconds, "import_statistics": False}
+
+
+@pytest.mark.parametrize("minutes", [9, 1441])
+async def test_options_reject_polling_more_often_than_10_minutes_or_less_than_daily(
+    hass: HomeAssistant, minutes: int,
+) -> None:
+    _, result = await _start_options(hass)
+
+    with pytest.raises(InvalidData):
+        await hass.config_entries.options.async_configure(
+            result["flow_id"], {"scan_interval": minutes, "import_statistics": True},
+        )

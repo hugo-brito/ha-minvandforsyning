@@ -83,6 +83,8 @@ The options screen also exposes **Import historical readings as long-term statis
 
 The **Total consumption** sensor uses `total_increasing`, so Home Assistant automatically tracks daily, weekly, and monthly statistics. You can add it as a Water source in the Energy dashboard.
 
+Home Assistant makes the entity IDs from the sensor names, in the language it uses when you add the meter. In English, they end in `_total_consumption`, `_hourly_consumption`, `_daily_consumption` and `_supplier_id`, for example `sensor.water_meter_<meter_number>_total_consumption`. In Danish, they end in `_samlet_forbrug`, `_timeforbrug`, `_dagligt_forbrug` and `_forsynings_id`.
+
 ## Long-term statistics
 
 When **Import historical readings as long-term statistics** is enabled (the default), the integration writes an external long-term-statistics stream:
@@ -95,11 +97,13 @@ Each hourly reading is recorded at the supplier's reported timestamp, not at the
 
 When the stream is empty, for example right after you install the integration, the next import fetches up to 5 years of supplier history in a single API call and imports every reading. Once the stream has data, only new readings are imported. If you delete the stream, the next poll rebuilds it from the supplier's history.
 
+If the supplier doesn't answer the history request, the stream stays empty and the next poll asks again. After 3 failed attempts in a row, the integration imports the newest readings instead. See [Long-term statistics only start on the day I installed the integration](#long-term-statistics-only-start-on-the-day-i-installed-the-integration) to import the history later.
+
 ### Using the new stream in the Energy dashboard
 
 After the first poll, the statistic appears in **Settings** > **Dashboards** > **Energy** > **Water consumption** > **Edit**. Pick **Water Meter \<meter_number\> Total Consumption** (under the *MinVandforsyning* group) and save.
 
-The `sensor.water_meter_<meter_number>_total_consumption` entity continues to work and Home Assistant still generates its own long-term statistics from it at poll time. Do not add both to the Energy dashboard at the same time; the values will double-count.
+The **Total consumption** sensor continues to work and Home Assistant still generates its own long-term statistics from it at poll time. Do not add both to the Energy dashboard at the same time; the values will double-count.
 
 ### Backfill service
 
@@ -129,6 +133,8 @@ Deleting the integration's config entry removes the sensor entities but leaves t
 ## How it works
 
 The integration talks to the same public API that the minvandforsyning.dk website uses. It fetches anonymous access tokens (no login required) and retrieves meter data in a binary protobuf format, which is decoded locally with a pure Python parser - zero external dependencies.
+
+If the API asks the integration to slow down, a request waits up to 30 seconds and tries again. When the API asks for a longer pause, Home Assistant waits that long before the next poll: at least the polling interval, and at most 24 hours.
 
 ## Troubleshooting
 
@@ -171,9 +177,7 @@ To recover:
 
 1. Go to **Settings** > **Developer tools** > **Statistics**.
 2. Look for issues listed against:
-   - `sensor.water_meter_<meter_number>_total_consumption`
-   - `sensor.water_meter_<meter_number>_hourly_consumption`
-   - `sensor.water_meter_<meter_number>_daily_consumption`
+   - the meter's **Total consumption**, **Hourly consumption** and **Daily consumption** sensors (see [Sensors](#sensors) for their entity IDs)
    - `minvandforsyning:water_meter_<meter_number>_total`
 3. Click **Fix issue** on each and choose **Delete** (or "Delete all long term statistics").
 4. Wait for the next poll (up to 1 hour by default). Fresh statistics will be written with the correct unit, and the Energy dashboard chart will start populating. The `minvandforsyning:water_meter_<meter_number>_total` stream is rebuilt with the supplier's history.
@@ -182,7 +186,7 @@ You don't need to remove or re-add the Water source in the Energy dashboard - it
 
 ### Long-term statistics only start on the day I installed the integration
 
-Versions 1.0.26156.1 to 1.0.26217.1 could skip the supplier's history during setup. The history is also skipped if the supplier doesn't answer the history request, in which case the log says `Could not import the supplier history`. To import it, call the backfill service:
+Versions 1.0.26156.1 to 1.0.26217.1 could skip the supplier's history during setup. The history is also skipped if the supplier doesn't answer the history request 3 polls in a row, in which case the log says `Could not import the supplier history for meter <meter_number> after 3 attempts`. To import it, call the backfill service:
 
 ```yaml
 service: minvandforsyning.backfill_statistics

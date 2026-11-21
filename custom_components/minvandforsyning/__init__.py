@@ -111,6 +111,14 @@ def _async_register_backfill_service(hass: HomeAssistant) -> None:
             if meter_filter and coord.meter_number != meter_filter:
                 continue
             matched = True
+            if not coord.can_store_statistics:
+                # The recorder would reject the import, so skip the request.
+                _LOGGER.warning(
+                    "Backfill: skipping meter %s, because its number can't be "
+                    "part of a statistic ID",
+                    coord.meter_number,
+                )
+                continue
             try:
                 if days is not None:
                     # Fresh fetch with the requested window (up to ~5y).

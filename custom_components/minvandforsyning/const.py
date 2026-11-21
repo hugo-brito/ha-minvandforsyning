@@ -34,8 +34,9 @@ SUPPLIER_ISSUE_TEMPLATE = "add_supplier.yml"
 # Bounded so we never monopolize the coordinator's update window.
 API_MAX_ATTEMPTS = 3
 API_BACKOFF_BASE_SECONDS = 1.0
-# Setup's first refresh runs while the setup dialog waits, so each wait for a
-# Retry-After from the API is cut to this many seconds.
+# A request waits for a Retry-After of up to this many seconds and tries again.
+# A longer pause fails the request, and Home Assistant waits that long before
+# the next poll or setup retry.
 API_RETRY_AFTER_MAX_SECONDS = 30.0
 API_TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
@@ -70,6 +71,10 @@ STATISTIC_ID_FORMAT = DOMAIN + ":water_meter_{meter_number}_total"
 # endpoint serves up to ~5 years of hourly history in a single ~1.3 s call.
 # Beyond ~5 years the response stops growing — that's the effective ceiling.
 INITIAL_HYDRATE_DAYS = 1825  # ~5 years; API ceiling observed via probe
+# A failed history import leaves the statistics empty, so the next poll tries
+# again. After this many failures in a row, the latest readings are imported
+# instead, and the backfill service can import the history later.
+HISTORY_IMPORT_ATTEMPTS = 3
 # Backfill service caps `days` at the same ceiling so users can repopulate
 # the full available supplier history after deleting the LTS stream.
 SERVICE_BACKFILL_MAX_DAYS = 1825  # see INITIAL_HYDRATE_DAYS

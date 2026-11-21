@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from aiohttp import ClientResponseError
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import (
     StatisticData,
@@ -26,22 +27,25 @@ from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api_client import MinvandforsyningClient
+from .api_client import (
+    InvalidResponseError,
+    MeterReading,
+    MinvandforsyningClient,
+    parse_readings,
+    retry_after_seconds,
+)
 from .const import (
-    COL_CONSUMPTION,
-    COL_READING,
-    COL_READING_DATE,
     DEFAULT_IMPORT_STATISTICS,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    HISTORY_IMPORT_ATTEMPTS,
     INITIAL_HYDRATE_DAYS,
     LITERS_PER_CUBIC_METER,
+    MAX_SCAN_INTERVAL,
     READING_DATE_TZ,
-    READINGS_TABLE_INDEX,
     RECENT_READINGS_DAYS,
     STATISTIC_ID_FORMAT,
 )
-from .protobuf_parser import parse_dataset
 
 _LOGGER = logging.getLogger(__name__)
 _READING_DATE_ZONE = ZoneInfo(READING_DATE_TZ)
@@ -63,17 +67,6 @@ def _interval_start_utc(reading_date: datetime) -> datetime:
     else:
         utc_end = reading_date.replace(tzinfo=timezone.utc)
     return utc_end - timedelta(hours=1)
-
-
-class MeterReading:
-    """A single hourly meter reading."""
-
-    __slots__ = ("date", "reading", "consumption")
-
-    def __init__(self, date: datetime, reading: Decimal, consumption: Decimal) -> None:
-        self.date = date
-        self.reading = reading
-        self.consumption = consumption
 
 
 class MinvandforsyningData:
@@ -147,6 +140,8 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         # background import task triggered by a previous refresh can't race
         # the next refresh's import or a backfill service call.
         self._stats_lock = asyncio.Lock()
+        # History imports that failed in a row; see _safe_import_readings.
+        self._failed_history_imports = 0
         self._can_store_statistics = valid_statistic_id(self.statistic_id)
         if import_statistics and not self._can_store_statistics:
             _LOGGER.warning(
@@ -160,6 +155,11 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
     def meter_number(self) -> str:
         """Supplier-side meter identifier."""
         return self._meter_number
+
+    @property
+    def can_store_statistics(self) -> bool:
+        """Whether the meter number can be part of a statistic ID."""
+        return self._can_store_statistics
 
     @property
     def statistic_id(self) -> str:
@@ -188,27 +188,19 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             raw = await self._client.async_get_meter_data(
                 self._meter_number, self._supplier_id, date_from, date_to,
             )
+        except ClientResponseError as err:
+            # The error's own text has the request URL, with the meter number.
+            raise UpdateFailed(
+                f"Error fetching meter data: HTTP {err.status}",
+                retry_after=self._pause_after_rate_limit(err),
+            ) from err
         except Exception as err:
             raise UpdateFailed(f"Error fetching meter data: {err}") from err
 
         try:
-            tables = parse_dataset(raw)
-        except Exception as err:
+            readings = parse_readings(raw, now)
+        except InvalidResponseError as err:
             raise UpdateFailed(f"Error parsing meter data: {err}") from err
-
-        if len(tables) <= READINGS_TABLE_INDEX:
-            raise UpdateFailed(
-                f"Response has {len(tables)} tables, expected at least {READINGS_TABLE_INDEX + 1}"
-            )
-
-        readings_table = tables[READINGS_TABLE_INDEX]
-        readings: list[MeterReading] = []
-        for row in readings_table.rows:
-            reading_date = row.get(COL_READING_DATE)
-            reading = row.get(COL_READING)
-            consumption = row.get(COL_CONSUMPTION)
-            if reading_date is not None and reading is not None and consumption is not None:
-                readings.append(MeterReading(reading_date, reading, consumption))
 
         _LOGGER.debug(
             "Fetched %d readings for meter %s over %d days (latest: %s)",
@@ -218,6 +210,17 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             readings[-1].date if readings else "none",
         )
         return MinvandforsyningData(readings)
+
+    def _pause_after_rate_limit(self, err: ClientResponseError) -> float | None:
+        """Return how long Home Assistant should wait after a rate limit."""
+        if err.status != 429 or (seconds := retry_after_seconds(err.headers)) is None:
+            return None
+        if self.data is not None and self.update_interval:
+            # After setup, Home Assistant polls again after this delay instead
+            # of the interval, which must stay the shortest wait.
+            seconds = max(seconds, self.update_interval.total_seconds())
+        # Home Assistant limits the wait of a setup retry, but not of a poll.
+        return min(seconds, MAX_SCAN_INTERVAL)
 
     async def _async_update_data(self) -> MinvandforsyningData:
         """Fetch and parse meter data for the routine poll window."""
@@ -257,20 +260,35 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
 
         An empty stream gets the supplier's history instead, which includes
         these readings. Storing these first would make the history import
-        skip everything older.
+        skip everything older, so after a failed history import they wait for
+        the next poll to try again, up to HISTORY_IMPORT_ATTEMPTS in a row.
         """
         if not self._can_store_statistics:
             return
         try:
-            if await self.async_hydrate():
+            imported_history = await self.async_hydrate()
+        except Exception:  # noqa: BLE001 - tried again, then the latest readings are imported
+            self._failed_history_imports += 1
+            if self._failed_history_imports < HISTORY_IMPORT_ATTEMPTS:
+                _LOGGER.warning(
+                    "Could not import the supplier history for meter %s; "
+                    "trying again at the next poll",
+                    self._meter_number,
+                    exc_info=True,
+                )
                 return
-        except Exception:  # noqa: BLE001 - the latest readings are still imported
             _LOGGER.warning(
-                "Could not import the supplier history for meter %s; "
-                "importing the latest readings instead",
+                "Could not import the supplier history for meter %s after %d attempts, "
+                "so only the latest readings are imported; the backfill service can "
+                "import it later",
                 self._meter_number,
+                HISTORY_IMPORT_ATTEMPTS,
                 exc_info=True,
             )
+            imported_history = False
+        self._failed_history_imports = 0
+        if imported_history:
+            return
         try:
             await self.async_import_readings(data)
         except Exception:  # noqa: BLE001 - intentional safety net
