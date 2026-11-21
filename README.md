@@ -186,7 +186,7 @@ You don't need to remove or re-add the Water source in the Energy dashboard - it
 
 ### Long-term statistics only start on the day I installed the integration
 
-Versions 1.0.26156.1 to 1.0.26217.1 could skip the supplier's history during setup. The history is also skipped if the history request fails, or answers without readings, 3 polls in a row, in which case the log says `Could not import the supplier history for meter <meter_number> after 3 attempts`. To import it, call the backfill service:
+Versions 1.0.26156.1 to 1.0.26217.1 could skip the supplier's history during setup. The history is also skipped if the history request fails, or answers without readings, 3 polls in a row, in which case the log says `Could not import the supplier history for meter <meter_number> after <n> attempts`. To import it, call the backfill service:
 
 ```yaml
 service: minvandforsyning.backfill_statistics

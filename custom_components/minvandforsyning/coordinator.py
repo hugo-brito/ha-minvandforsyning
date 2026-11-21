@@ -300,7 +300,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 "so only the latest readings are imported; the backfill service can "
                 "import it later",
                 self._meter_number,
-                HISTORY_IMPORT_ATTEMPTS,
+                failed,
                 exc_info=True,
             )
             imported_history = False

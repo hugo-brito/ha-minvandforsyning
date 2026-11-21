@@ -854,7 +854,7 @@ async def test_the_fallback_waits_for_a_poll_with_readings(
     await _wait_for_statistics(hass)
 
     assert await _hourly_sums(hass) == pytest.approx([0.012, 0.018])
-    assert "only the latest readings are imported" in caplog.text
+    assert f"after {HISTORY_IMPORT_ATTEMPTS + 1} attempts, so only the latest readings" in caplog.text
 
 
 async def _fail_the_history_import_every_time(
