@@ -274,7 +274,8 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         An empty stream gets the supplier's history instead, which includes
         these readings. Storing these first would make the history import
         skip everything older, so after a failed history import they wait for
-        the next poll to try again, up to HISTORY_IMPORT_ATTEMPTS in a row.
+        the next poll to try again, up to HISTORY_IMPORT_ATTEMPTS in a row,
+        and then for a poll with readings to import instead.
         A history without readings fails too, unless these have none either;
         then nothing is imported, and the count stays as it is.
         """
@@ -285,7 +286,7 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
             imported_history = await self.async_hydrate(require_readings=bool(data.readings))
         except Exception:  # noqa: BLE001 - tried again, then the latest readings are imported
             failed = self._failed_history_imports + 1
-            if failed < HISTORY_IMPORT_ATTEMPTS:
+            if failed < HISTORY_IMPORT_ATTEMPTS or not data.readings:
                 await self._async_set_failed_history_imports(failed)
                 _LOGGER.warning(
                     "Could not import the supplier history for meter %s; "

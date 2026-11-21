@@ -603,18 +603,21 @@ class TestExternalStatisticsMetadata:
 
 
 def _supplier(
-    history_error: Exception | None = None, history: bytes | None = None,
+    history_error: Exception | None = None,
+    history: bytes | None = None,
+    newest: bytes | None = None,
 ) -> Callable[..., bytes]:
     """Answer like the supplier: a routine poll only gets the newest readings."""
-    # The fixture's two newest readings.
-    latest = supplier_response([
-        (datetime(2026, 3, 30, 22), "103.046", "12"),
-        (datetime(2026, 3, 30, 23), "103.052", "6"),
-    ])
+    if newest is None:
+        # The fixture's two newest readings.
+        newest = supplier_response([
+            (datetime(2026, 3, 30, 22), "103.046", "12"),
+            (datetime(2026, 3, 30, 23), "103.052", "6"),
+        ])
 
     def respond(meter_number, supplier_id, date_from, date_to, **kwargs):
         if (date_to - date_from).days <= 30:
-            return latest
+            return newest
         if history_error is not None:
             raise history_error
         return _load_fixture_bytes() if history is None else history
@@ -812,13 +815,12 @@ async def test_polls_without_readings_keep_the_count_of_failed_history_imports(
 ) -> None:
     """Otherwise newest readings that come and go would keep the statistics empty."""
     with_readings = _supplier(history=supplier_response([]))
+    without_readings = _supplier(history=supplier_response([]), newest=supplier_response([]))
     supplier_api.async_get_meter_data.side_effect = with_readings
     entry = await _set_up_meter(hass)
     coordinator = hass.data[DOMAIN][entry.entry_id]
     for _ in range(HISTORY_IMPORT_ATTEMPTS - 1):
-        supplier_api.async_get_meter_data.side_effect = (
-            lambda *args, **kwargs: supplier_response([])
-        )
+        supplier_api.async_get_meter_data.side_effect = without_readings
         await coordinator.async_refresh()
         await _wait_for_statistics(hass)
         supplier_api.async_get_meter_data.side_effect = with_readings
@@ -827,6 +829,32 @@ async def test_polls_without_readings_keep_the_count_of_failed_history_imports(
 
     assert await _hourly_sums(hass) == pytest.approx([0.012, 0.018])
     assert f"after {HISTORY_IMPORT_ATTEMPTS} attempts" in caplog.text
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_the_fallback_waits_for_a_poll_with_readings(
+    hass: HomeAssistant, supplier_api: MagicMock, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Without newest readings, a last failed attempt has nothing to fall back to."""
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    for _ in range(HISTORY_IMPORT_ATTEMPTS - 2):
+        await coordinator.async_refresh()
+        await _wait_for_statistics(hass)
+    supplier_api.async_get_meter_data.side_effect = _supplier(
+        ClientConnectionError(), newest=supplier_response([]),
+    )
+    await coordinator.async_refresh()
+    await _wait_for_statistics(hass)
+    assert "only the latest readings are imported" not in caplog.text
+
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    await coordinator.async_refresh()
+    await _wait_for_statistics(hass)
+
+    assert await _hourly_sums(hass) == pytest.approx([0.012, 0.018])
+    assert "only the latest readings are imported" in caplog.text
 
 
 async def _fail_the_history_import_every_time(
