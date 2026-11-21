@@ -4,7 +4,8 @@ backfill_statistics:
     Re-imports meter readings into long-term statistics at the supplier's
     reported timestamps. When 'days' is set, the integration fetches that
     many days of fresh data from the supplier (up to ~5 years). When 'days'
-    is omitted, it replays the most recently cached readings (up to 48 h).
+    is omitted, it replays the most recently cached readings (about the last
+    7 days).
     Use after deleting bad statistics, or to bootstrap a long history after
     the integration was reinstalled.
   fields:

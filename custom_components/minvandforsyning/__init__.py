@@ -21,7 +21,7 @@ from .const import (
     SERVICE_BACKFILL_MAX_DAYS,
     SERVICE_BACKFILL_STATISTICS,
 )
-from .coordinator import MinvandforsyningCoordinator
+from .coordinator import MinvandforsyningCoordinator, history_import_store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,6 +51,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = MinvandforsyningCoordinator(
         hass,
+        entry,
         client,
         meter_number=entry.data["meter_number"],
         supplier_id=entry.data["supplier_id"],
@@ -64,16 +65,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # Hydrate LTS with supplier history on first install. Idempotent: skips
-    # if the stream is already populated, so re-installs and reload-after-
-    # options are free. Background task so setup never blocks on the
-    # multi-year fetch.
-    if import_statistics:
-        hass.async_create_background_task(
-            coordinator._safe_hydrate(),
-            name=f"{DOMAIN}_hydrate_{entry.data['meter_number']}",
-        )
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
@@ -104,6 +95,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Forget what the removed meter stored about its history imports."""
+    await history_import_store(hass, entry.entry_id).async_remove()
+
+
 def _async_register_backfill_service(hass: HomeAssistant) -> None:
     """Register the ``backfill_statistics`` service once per HA instance."""
     if hass.services.has_service(DOMAIN, SERVICE_BACKFILL_STATISTICS):
@@ -120,6 +116,14 @@ def _async_register_backfill_service(hass: HomeAssistant) -> None:
             if meter_filter and coord.meter_number != meter_filter:
                 continue
             matched = True
+            if not coord.can_store_statistics:
+                # The recorder would reject the import, so skip the request.
+                _LOGGER.warning(
+                    "Backfill: skipping meter %s, because its number can't be "
+                    "part of a statistic ID",
+                    coord.meter_number,
+                )
+                continue
             try:
                 if days is not None:
                     # Fresh fetch with the requested window (up to ~5y).

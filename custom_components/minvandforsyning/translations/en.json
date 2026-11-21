@@ -3,23 +3,87 @@
     "step": {
       "user": {
         "title": "MinVandforsyning",
-        "description": "Enter your water meter number. You can find it on the minvandforsyning.dk page header or on your water bill.",
+        "description": "Enter your water meter number.",
         "data": {
           "meter_number": "Meter number"
+        },
+        "data_description": {
+          "meter_number": "Shown in the page header on minvandforsyning.dk and on your water bill."
         }
+      },
+      "supplier_method": {
+        "title": "Find your water supplier",
+        "description": "How do you want to find the water supplier for meter {meter_number}?",
+        "menu_options": {
+          "select_supplier": "Choose my supplier from the list",
+          "manual_supplier": "Enter my supplier ID",
+          "discover_supplier": "Search for my supplier"
+        },
+        "menu_option_descriptions": {
+          "select_supplier": "Fastest, if your water supplier is on the list.",
+          "manual_supplier": "Use this if you already know your numeric supplier ID.",
+          "discover_supplier": "Checks supplier IDs {scan_start}-{scan_end}. This can take a few minutes."
+        }
+      },
+      "select_supplier": {
+        "title": "Choose your water supplier",
+        "data": {
+          "supplier_id": "Water supplier"
+        },
+        "data_description": {
+          "supplier_id": "If your supplier isn't on the list, choose the last option to enter or search for its ID instead."
+        }
+      },
+      "manual_supplier": {
+        "title": "Enter your supplier ID",
+        "description": "Enter the supplier ID for meter {meter_number}.",
+        "data": {
+          "supplier_id": "Supplier ID"
+        },
+        "data_description": {
+          "supplier_id": "The number that the MinVandforsyning API uses for your water supplier. It is not the short supplier code, such as MSV, that some suppliers use for logging in to minvandforsyning.dk."
+        }
+      },
+      "discover_failed": {
+        "title": "Supplier not found",
+        "description": "No supplier with an ID from {scan_start} to {scan_end} has recent readings for meter {meter_number}.",
+        "menu_options": {
+          "discover_next": "Search supplier IDs {next_start}-{next_end}",
+          "manual_supplier": "Enter my supplier ID"
+        }
+      },
+      "discover_supplier": {
+        "title": "Searching for your supplier"
       },
       "confirm": {
         "title": "Confirm meter",
-        "description": "Found meter {meter_number} at supplier {supplier_id}.\n\nLatest reading: {latest_reading} m³\n\nDo you want to add this meter?"
+        "description": "Found meter {meter_number} at supplier ID {supplier_id}.\n\nLatest reading: {latest_reading} m³\n\nDo you want to add this meter?"
+      },
+      "confirm_known": {
+        "title": "Confirm meter",
+        "description": "Found meter {meter_number} at {supplier_name} (supplier ID {supplier_id}).\n\nLatest reading: {latest_reading} m³\n\nDo you want to add this meter?"
       }
     },
+    "progress": {
+      "discover_supplier": "Searching supplier IDs {scan_start}-{scan_end} for meter {meter_number}. This can take a few minutes."
+    },
     "error": {
-      "invalid_meter_number": "Please enter a valid meter number."
+      "invalid_meter_number": "Please enter a valid meter number.",
+      "meter_not_found_at_supplier": "This supplier has no recent readings for this meter. Check the supplier and meter number.",
+      "cannot_connect": "Could not connect to the MinVandforsyning API.",
+      "rate_limited": "The MinVandforsyning API is limiting requests. Wait a few minutes and try again.",
+      "invalid_response": "The MinVandforsyning API returned data that the integration could not read.",
+      "unknown": "Unexpected error. Check the Home Assistant logs for details."
     },
     "abort": {
       "already_configured": "This meter is already configured.",
       "cannot_connect": "Could not connect to the MinVandforsyning API.",
-      "meter_not_found": "Could not find data for this meter number. Please verify the number and try again."
+      "rate_limited": "The MinVandforsyning API is limiting requests. Wait a few minutes and try again.",
+      "invalid_response": "The MinVandforsyning API returned data that the integration could not read.",
+      "unknown": "Unexpected error. Check the Home Assistant logs for details."
+    },
+    "create_entry": {
+      "share_supplier": "Your meter was added. Supplier ID {supplier_id} isn't on the supplier list yet. [Share it on GitHub]({issue_url}) so others can choose it during setup. Add your supplier's name, but never your meter number."
     }
   },
   "options": {
@@ -33,10 +97,17 @@
       }
     }
   },
+  "selector": {
+    "supplier": {
+      "options": {
+        "not_listed": "My supplier isn't on the list"
+      }
+    }
+  },
   "services": {
     "backfill_statistics": {
       "name": "Backfill long-term statistics",
-      "description": "Re-imports meter readings into long-term statistics at the supplier's reported timestamps. When 'days' is set, the integration fetches that many days of fresh data from the supplier (up to ~5 years). When 'days' is omitted, it replays the most recently cached readings (up to 48 hours). Use after deleting bad statistics, or to bootstrap a long history after the integration was reinstalled.",
+      "description": "Re-imports meter readings into long-term statistics at the supplier's reported timestamps. When 'days' is set, the integration fetches that many days of fresh data from the supplier (up to ~5 years). When 'days' is omitted, it replays the most recently cached readings (about the last 7 days). Use after deleting bad statistics, or to bootstrap a long history after the integration was reinstalled.",
       "fields": {
         "meter_number": {
           "name": "Meter number",
@@ -44,7 +115,7 @@
         },
         "days": {
           "name": "Days",
-          "description": "Number of days of history to fetch from the supplier (1-1825). Omit to replay only the most recent cached readings (up to 48 h)."
+          "description": "Number of days of history to fetch from the supplier (1-1825). Omit to replay only the most recent cached readings (about the last 7 days)."
         },
         "force_full": {
           "name": "Force full",
@@ -63,6 +134,9 @@
       },
       "daily": {
         "name": "Daily consumption"
+      },
+      "supplier_id": {
+        "name": "Supplier ID"
       }
     }
   }

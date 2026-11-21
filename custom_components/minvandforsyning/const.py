@@ -18,16 +18,29 @@ CONF_SCAN_INTERVAL = "scan_interval"
 MIN_SCAN_INTERVAL = 600    # 10 minutes in seconds
 MAX_SCAN_INTERVAL = 86400  # 24 hours in seconds
 DEFAULT_SCAN_INTERVAL = 3600  # 1 hour in seconds
-QUERY_LOOKBACK_HOURS = 48
 
 SUPPLIER_ID_SCAN_MIN = 1
-SUPPLIER_ID_SCAN_MAX = 500
-SUPPLIER_DISCOVERY_THRESHOLD_BYTES = 910  # empty schema ~903 bytes
+# Each supplier search checks at most this many IDs.
+SUPPLIER_ID_SCAN_BATCH_SIZE = 500
+SUPPLIER_ID_SCAN_MAX = SUPPLIER_ID_SCAN_MIN + SUPPLIER_ID_SCAN_BATCH_SIZE - 1
+SUPPLIER_SCAN_DELAY_SECONDS = 0.05
+# Some suppliers publish readings days late. Setup accepts a meter with a
+# reading from this many recent days, and every poll asks for the same days.
+RECENT_READINGS_DAYS = 7
+SUPPLIER_ISSUE_URL = "https://github.com/hugo-brito/ha-minvandforsyning/issues/new"
+SUPPLIER_ISSUE_TEMPLATE = "add_supplier.yml"
 
 # Retry policy for transient API failures (5xx, 429, network errors, timeouts).
 # Bounded so we never monopolize the coordinator's update window.
 API_MAX_ATTEMPTS = 3
 API_BACKOFF_BASE_SECONDS = 1.0
+# A request waits for a Retry-After of up to this many seconds and tries again.
+# A longer pause fails the request, and Home Assistant waits that long before
+# the next poll or setup retry.
+API_RETRY_AFTER_MAX_SECONDS = 30.0
+# The longest a poll waits after a rate limit, like Home Assistant's limit for
+# setup retries.
+RATE_LIMIT_MAX_PAUSE_SECONDS = 86400  # 24 hours
 API_TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 # Table index for hourly meter readings in the protobuf DataSet
@@ -61,6 +74,10 @@ STATISTIC_ID_FORMAT = DOMAIN + ":water_meter_{meter_number}_total"
 # endpoint serves up to ~5 years of hourly history in a single ~1.3 s call.
 # Beyond ~5 years the response stops growing — that's the effective ceiling.
 INITIAL_HYDRATE_DAYS = 1825  # ~5 years; API ceiling observed via probe
+# A failed history import leaves the statistics empty, so the next poll tries
+# again. After this many failures in a row, the latest readings are imported
+# instead, and the backfill service can import the history later.
+HISTORY_IMPORT_ATTEMPTS = 3
 # Backfill service caps `days` at the same ceiling so users can repopulate
 # the full available supplier history after deleting the LTS stream.
 SERVICE_BACKFILL_MAX_DAYS = 1825  # see INITIAL_HYDRATE_DAYS

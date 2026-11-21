@@ -1,0 +1,36 @@
+name: Add a water supplier
+description: Share a supplier ID that worked during setup, so others can choose it from the list.
+title: "Add supplier "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping other MinVandforsyning users!
+
+        Supplier IDs and names are the same for everyone at a water supplier. Issues are public, so **never include your meter number, address, or other personal information.**
+  - type: input
+    id: supplier_id
+    attributes:
+      label: Supplier ID
+      description: The numeric supplier ID that Home Assistant found or accepted during setup.
+      placeholder: "123"
+    validations:
+      required: true
+  - type: input
+    id: supplier_name
+    attributes:
+      label: Supplier name
+      description: Your water supplier's name, as shown on your water bill or on the supplier's website.
+      placeholder: Example Vandværk
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: Home Assistant set up my meter successfully with this supplier ID.
+          required: true
+        - label: I have not included my meter number or other personal information.
+          required: true

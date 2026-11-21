@@ -3,23 +3,87 @@
     "step": {
       "user": {
         "title": "MinVandforsyning",
-        "description": "Indtast dit vandmåler-nummer. Du kan finde det på minvandforsyning.dk i sidehovedet eller på din vandregning.",
+        "description": "Indtast dit vandmåler-nummer.",
         "data": {
           "meter_number": "Målernummer"
+        },
+        "data_description": {
+          "meter_number": "Står i sidehovedet på minvandforsyning.dk og på din vandregning."
         }
+      },
+      "supplier_method": {
+        "title": "Find din vandforsyning",
+        "description": "Hvordan vil du finde vandforsyningen til måler {meter_number}?",
+        "menu_options": {
+          "select_supplier": "Vælg min forsyning på listen",
+          "manual_supplier": "Indtast mit forsynings-ID",
+          "discover_supplier": "Søg efter min forsyning"
+        },
+        "menu_option_descriptions": {
+          "select_supplier": "Hurtigst, hvis din vandforsyning står på listen.",
+          "manual_supplier": "Brug denne, hvis du allerede kender dit numeriske forsynings-ID.",
+          "discover_supplier": "Tjekker forsynings-ID {scan_start}-{scan_end}. Det kan tage et par minutter."
+        }
+      },
+      "select_supplier": {
+        "title": "Vælg din vandforsyning",
+        "data": {
+          "supplier_id": "Vandforsyning"
+        },
+        "data_description": {
+          "supplier_id": "Hvis din forsyning ikke står på listen, så vælg den sidste mulighed for i stedet at indtaste eller søge efter dens ID."
+        }
+      },
+      "manual_supplier": {
+        "title": "Indtast dit forsynings-ID",
+        "description": "Indtast forsynings-ID'et for måler {meter_number}.",
+        "data": {
+          "supplier_id": "Forsynings-ID"
+        },
+        "data_description": {
+          "supplier_id": "Det nummer, som MinVandforsyning API bruger for din vandforsyning. Det er ikke den korte forsyningskode, f.eks. MSV, som nogle forsyninger bruger til login på minvandforsyning.dk."
+        }
+      },
+      "discover_failed": {
+        "title": "Forsyning ikke fundet",
+        "description": "Ingen forsyning med et ID fra {scan_start} til {scan_end} har nylige aflæsninger for måler {meter_number}.",
+        "menu_options": {
+          "discover_next": "Søg i forsynings-ID {next_start}-{next_end}",
+          "manual_supplier": "Indtast mit forsynings-ID"
+        }
+      },
+      "discover_supplier": {
+        "title": "Søger efter din forsyning"
       },
       "confirm": {
         "title": "Bekræft måler",
-        "description": "Fundet måler {meter_number} hos forsyning {supplier_id}.\n\nSeneste aflæsning: {latest_reading} m³\n\nVil du tilføje denne måler?"
+        "description": "Måler {meter_number} blev fundet med forsynings-ID {supplier_id}.\n\nSeneste aflæsning: {latest_reading} m³\n\nVil du tilføje denne måler?"
+      },
+      "confirm_known": {
+        "title": "Bekræft måler",
+        "description": "Måler {meter_number} blev fundet hos {supplier_name} (forsynings-ID {supplier_id}).\n\nSeneste aflæsning: {latest_reading} m³\n\nVil du tilføje denne måler?"
       }
     },
+    "progress": {
+      "discover_supplier": "Søger i forsynings-ID {scan_start}-{scan_end} efter måler {meter_number}. Det kan tage et par minutter."
+    },
     "error": {
-      "invalid_meter_number": "Indtast et gyldigt målernummer."
+      "invalid_meter_number": "Indtast et gyldigt målernummer.",
+      "meter_not_found_at_supplier": "Denne forsyning har ingen nylige aflæsninger for denne måler. Kontroller forsyningen og målernummeret.",
+      "cannot_connect": "Kunne ikke oprette forbindelse til MinVandforsyning API.",
+      "rate_limited": "MinVandforsyning API begrænser antallet af forespørgsler. Vent et par minutter, og prøv igen.",
+      "invalid_response": "MinVandforsyning API returnerede data, som integrationen ikke kunne læse.",
+      "unknown": "Uventet fejl. Se Home Assistant-loggen for detaljer."
     },
     "abort": {
       "already_configured": "Denne måler er allerede konfigureret.",
       "cannot_connect": "Kunne ikke oprette forbindelse til MinVandforsyning API.",
-      "meter_not_found": "Kunne ikke finde data for dette målernummer. Kontroller nummeret og prøv igen."
+      "rate_limited": "MinVandforsyning API begrænser antallet af forespørgsler. Vent et par minutter, og prøv igen.",
+      "invalid_response": "MinVandforsyning API returnerede data, som integrationen ikke kunne læse.",
+      "unknown": "Uventet fejl. Se Home Assistant-loggen for detaljer."
+    },
+    "create_entry": {
+      "share_supplier": "Din måler er tilføjet. Forsynings-ID {supplier_id} står ikke på forsyningslisten endnu. [Del det på GitHub]({issue_url}), så andre kan vælge det under opsætningen. Skriv navnet på din vandforsyning, men aldrig dit målernummer."
     }
   },
   "options": {
@@ -33,10 +97,17 @@
       }
     }
   },
+  "selector": {
+    "supplier": {
+      "options": {
+        "not_listed": "Min forsyning står ikke på listen"
+      }
+    }
+  },
   "services": {
     "backfill_statistics": {
       "name": "Genimportér langtidsstatistik",
-      "description": "Genimporterer måleraflæsninger i langtidsstatistik med leverandørens rapporterede tidsstempler. Hvis 'Dage' er angivet, henter integrationen så mange dages friske data fra leverandøren (op til ca. 5 år). Hvis 'Dage' udelades, genimporteres kun de seneste cachede aflæsninger (op til 48 timer). Brug efter sletning af forkerte statistikker eller til at indlæse en lang historik efter geninstallation af integrationen.",
+      "description": "Genimporterer måleraflæsninger i langtidsstatistik med leverandørens rapporterede tidsstempler. Hvis 'Dage' er angivet, henter integrationen så mange dages friske data fra leverandøren (op til ca. 5 år). Hvis 'Dage' udelades, genimporteres kun de seneste cachede aflæsninger (cirka de seneste 7 dage). Brug efter sletning af forkerte statistikker eller til at indlæse en lang historik efter geninstallation af integrationen.",
       "fields": {
         "meter_number": {
           "name": "Målernummer",
@@ -44,7 +115,7 @@
         },
         "days": {
           "name": "Dage",
-          "description": "Antal dage af historik der hentes fra leverandøren (1-1825). Udelad for kun at genimportere de seneste cachede aflæsninger (op til 48 timer)."
+          "description": "Antal dage af historik der hentes fra leverandøren (1-1825). Udelad for kun at genimportere de seneste cachede aflæsninger (cirka de seneste 7 dage)."
         },
         "force_full": {
           "name": "Tving fuld import",
@@ -63,6 +134,9 @@
       },
       "daily": {
         "name": "Dagligt forbrug"
+      },
+      "supplier_id": {
+        "name": "Forsynings-ID"
       }
     }
   }

@@ -3,12 +3,34 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+from collections.abc import Callable, Generator
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from functools import partial
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import ClientConnectionError
+from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.models import StatisticMeanType
+from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
+    get_last_statistics,
+    get_metadata,
+    statistics_during_period,
+)
+from homeassistant.components.recorder.tasks import RecorderTask
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.components.recorder.common import (
+    async_wait_recording_done,
+)
 
 from custom_components.minvandforsyning import (
     SERVICE_BACKFILL_SCHEMA,
@@ -16,26 +38,21 @@ from custom_components.minvandforsyning import (
 )
 from custom_components.minvandforsyning.const import (
     DOMAIN,
+    HISTORY_IMPORT_ATTEMPTS,
     SERVICE_BACKFILL_STATISTICS,
 )
 from custom_components.minvandforsyning.coordinator import (
-    _HAS_STATISTIC_MEAN_TYPE,
     MeterReading,
     MinvandforsyningCoordinator,
     MinvandforsyningData,
-    StatisticMeanType,
 )
+
+from .payloads import supplier_response
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-# TODO: a recorder-mock end-to-end integration test against the real recorder
-# (via pytest-homeassistant-custom-component) is intentionally NOT included
-# here — adopting that plugin's fixtures pulls in significant test infra into
-# the standalone runner. The mocked boundary tests below cover the contract
-# we care about (correct call shape, idempotency, lock semantics).
 
 _DEFAULT_METER = "12345"
 _DEFAULT_STATISTIC_ID = f"{DOMAIN}:water_meter_{_DEFAULT_METER}_total"
@@ -68,9 +85,12 @@ def _make_coordinator(*, import_statistics: bool = True, meter: str = _DEFAULT_M
     end-to-end.
     """
     hass = MagicMock()
+    # Parsing runs in the executor, which here runs the job at once.
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda func, *args: func(*args))
     client = MagicMock()
+    entry = MockConfigEntry(domain=DOMAIN, data={"meter_number": meter, "supplier_id": 1})
     coord = MinvandforsyningCoordinator(
-        hass, client,
+        hass, entry, client,
         meter_number=meter, supplier_id=1,
         import_statistics=import_statistics,
     )
@@ -168,6 +188,7 @@ class _RecorderPatches:
             return func(*args, **kwargs)
 
         recorder.async_add_executor_job = AsyncMock(side_effect=_exec)
+        recorder.async_block_till_done = AsyncMock()
         self.get_instance.return_value = recorder
         return self
 
@@ -494,7 +515,7 @@ class TestImportOptionFlag:
 
         expected_name = f"{DOMAIN}_import_stats_MMM1"
         assert any(
-            call.kwargs.get("name") == expected_name
+            expected_name in (*call.args[1:2], call.kwargs.get("name"))
             for call in coord.hass.async_create_background_task.call_args_list
         ), f"Expected background task named {expected_name!r}"
         # Drain the coroutines so pytest doesn't warn.
@@ -562,10 +583,10 @@ class TestExternalStatisticsMetadata:
         assert metadata["unit_of_measurement"] == "m³"
         assert metadata["has_sum"] is True
         assert metadata["name"] == f"Water Meter {_DEFAULT_METER} Total Consumption"
-        # unit_class is set for HA 2025.11+ unit-conversion hints.
         assert metadata["unit_class"] == "volume"
-        if _HAS_STATISTIC_MEAN_TYPE:
-            assert metadata["mean_type"] == StatisticMeanType.NONE
+        assert metadata["mean_type"] is StatisticMeanType.NONE
+        # has_mean is deprecated; don't add it back.
+        assert "has_mean" not in metadata
 
     @pytest.mark.asyncio
     async def test_statistic_id_format_namespaced(self):
@@ -579,6 +600,628 @@ class TestExternalStatisticsMetadata:
         metadata = p.import_stats.call_args[0][1]
         assert metadata["statistic_id"] == "minvandforsyning:water_meter_98765_total"
         assert metadata["source"] == "minvandforsyning"
+
+
+def _supplier(
+    history_error: Exception | None = None,
+    history: bytes | None = None,
+    newest: bytes | None = None,
+) -> Callable[..., bytes]:
+    """Answer like the supplier: a routine poll only gets the newest readings."""
+    if newest is None:
+        # The fixture's two newest readings.
+        newest = supplier_response([
+            (datetime(2026, 3, 30, 22), "103.046", "12"),
+            (datetime(2026, 3, 30, 23), "103.052", "6"),
+        ])
+
+    def respond(meter_number, supplier_id, date_from, date_to, **kwargs):
+        if (date_to - date_from).days <= 30:
+            return newest
+        if history_error is not None:
+            raise history_error
+        return _load_fixture_bytes() if history is None else history
+
+    return respond
+
+
+@pytest.fixture
+def supplier_api() -> Generator[MagicMock]:
+    """Mock the supplier API client that the integration creates."""
+    with patch(
+        "custom_components.minvandforsyning.MinvandforsyningClient", autospec=True,
+    ) as client_cls:
+        client_cls.return_value.async_get_meter_data.return_value = _load_fixture_bytes()
+        yield client_cls.return_value
+
+
+async def _wait_for_statistics(hass: HomeAssistant) -> None:
+    await hass.async_block_till_done(wait_background_tasks=True)
+    await async_wait_recording_done(hass)
+
+
+async def _set_up_meter(hass: HomeAssistant) -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=_DEFAULT_METER,
+        data={"meter_number": _DEFAULT_METER, "supplier_id": 1},
+        options={"import_statistics": True},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await _wait_for_statistics(hass)
+    return entry
+
+
+async def _hourly_sums(hass: HomeAssistant) -> list[float]:
+    """Return the stored cumulative sums in m³, oldest first."""
+    rows = await get_instance(hass).async_add_executor_job(
+        partial(
+            statistics_during_period,
+            hass,
+            datetime(2020, 1, 1, tzinfo=timezone.utc),
+            None,
+            {_DEFAULT_STATISTIC_ID},
+            "hour",
+            None,
+            {"sum"},
+        )
+    )
+    return [row["sum"] for row in rows.get(_DEFAULT_STATISTIC_ID, [])]
+
+
+def _history_requests(supplier_api: MagicMock) -> list[Any]:
+    """Return the requests for more than the routine poll's days."""
+    return [
+        call
+        for call in supplier_api.async_get_meter_data.await_args_list
+        if (call.args[3] - call.args[2]).days > 30
+    ]
+
+
+@pytest.mark.usefixtures("recorder_mock", "supplier_api")
+async def test_setup_stores_readings_in_the_recorder(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Setup imports the supplier's readings through the real recorder."""
+    await _set_up_meter(hass)
+
+    last = await get_instance(hass).async_add_executor_job(
+        get_last_statistics, hass, 1, _DEFAULT_STATISTIC_ID, True, {"state", "sum"},
+    )
+    [row] = last[_DEFAULT_STATISTIC_ID]
+    # The fixture ends with 103.052 m³ for the hour ending 2026-03-30 23:00 UTC,
+    # after 3052 L of consumption in total.
+    assert row["start"] == datetime(2026, 3, 30, 22, tzinfo=timezone.utc).timestamp()
+    assert row["state"] == pytest.approx(103.052)
+    assert row["sum"] == pytest.approx(3.052)
+    metadata = await get_instance(hass).async_add_executor_job(
+        partial(get_metadata, hass, statistic_ids={_DEFAULT_STATISTIC_ID}),
+    )
+    _, info = metadata[_DEFAULT_STATISTIC_ID]
+    assert (info["mean_type"], info["unit_class"], info["unit_of_measurement"]) == (
+        StatisticMeanType.NONE, "volume", "m³",
+    )
+    # Home Assistant logs this when an integration uses a deprecated API.
+    assert "Detected that custom integration" not in caplog.text
+    assert "Not importing the statistics stream" not in caplog.text
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_first_install_imports_the_supplier_history(
+    hass: HomeAssistant, supplier_api: MagicMock,
+) -> None:
+    """The newest readings must not be stored first, or the history is skipped."""
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+
+    entry = await _set_up_meter(hass)
+
+    sums = await _hourly_sums(hass)
+    assert len(sums) == 168
+    assert sums[-1] == pytest.approx(3.052)
+
+    # After a restart, the stored history is kept and not requested again.
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await _wait_for_statistics(hass)
+
+    assert await _hourly_sums(hass) == pytest.approx(sums)
+    assert len(_history_requests(supplier_api)) == 1
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_deleted_statistics_are_rebuilt_from_the_supplier_history(
+    hass: HomeAssistant, supplier_api: MagicMock, entity_registry: er.EntityRegistry,
+) -> None:
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+    await _set_up_meter(hass)
+    get_instance(hass).async_clear_statistics([_DEFAULT_STATISTIC_ID])
+    await async_wait_recording_done(hass)
+    assert await _hourly_sums(hass) == []
+
+    # The next poll finds the statistics empty and imports the history again.
+    assert await async_setup_component(hass, "homeassistant", {})
+    await hass.services.async_call(
+        "homeassistant",
+        "update_entity",
+        {
+            "entity_id": entity_registry.async_get_entity_id(
+                "sensor", DOMAIN, f"{_DEFAULT_METER}_total",
+            ),
+        },
+        blocking=True,
+    )
+    await _wait_for_statistics(hass)
+
+    sums = await _hourly_sums(hass)
+    assert len(sums) == 168
+    assert sums[-1] == pytest.approx(3.052)
+
+
+@pytest.mark.parametrize(
+    "failing_supplier",
+    [
+        pytest.param(_supplier(ClientConnectionError()), id="no_answer"),
+        # The history includes the newest readings, so it can't be empty.
+        pytest.param(_supplier(history=supplier_response([])), id="no_readings"),
+    ],
+)
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_failed_history_import_is_tried_again_at_the_next_poll(
+    hass: HomeAssistant,
+    supplier_api: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    failing_supplier: Callable[..., bytes],
+) -> None:
+    supplier_api.async_get_meter_data.side_effect = failing_supplier
+
+    entry = await _set_up_meter(hass)
+
+    # Storing the newest readings now would make the next attempt skip the
+    # history before them.
+    assert await _hourly_sums(hass) == []
+    assert (
+        f"Could not import the supplier history for meter {_DEFAULT_METER}; "
+        "trying again at the next poll"
+    ) in caplog.text
+
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+    await hass.data[DOMAIN][entry.entry_id].async_refresh()
+    await _wait_for_statistics(hass)
+
+    sums = await _hourly_sums(hass)
+    assert len(sums) == 168
+    assert sums[-1] == pytest.approx(3.052)
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_meter_without_readings_does_not_count_failed_history_imports(
+    hass: HomeAssistant,
+    supplier_api: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    hass_storage: dict[str, Any],
+) -> None:
+    """Without readings anywhere, there's nothing to keep the history from."""
+    supplier_api.async_get_meter_data.return_value = supplier_response([])
+
+    entry = await _set_up_meter(hass)
+
+    assert "Could not import the supplier history" not in caplog.text
+    assert not [key for key in hass_storage if entry.entry_id in key]
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_polls_without_readings_keep_the_count_of_failed_history_imports(
+    hass: HomeAssistant, supplier_api: MagicMock, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Otherwise newest readings that come and go would keep the statistics empty."""
+    with_readings = _supplier(history=supplier_response([]))
+    without_readings = _supplier(history=supplier_response([]), newest=supplier_response([]))
+    supplier_api.async_get_meter_data.side_effect = with_readings
+    entry = await _set_up_meter(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    for _ in range(HISTORY_IMPORT_ATTEMPTS - 1):
+        supplier_api.async_get_meter_data.side_effect = without_readings
+        await coordinator.async_refresh()
+        await _wait_for_statistics(hass)
+        supplier_api.async_get_meter_data.side_effect = with_readings
+        await coordinator.async_refresh()
+        await _wait_for_statistics(hass)
+
+    assert await _hourly_sums(hass) == pytest.approx([0.012, 0.018])
+    assert f"after {HISTORY_IMPORT_ATTEMPTS} attempts" in caplog.text
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_the_fallback_waits_for_a_poll_with_readings(
+    hass: HomeAssistant, supplier_api: MagicMock, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Without newest readings, a last failed attempt has nothing to fall back to."""
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    for _ in range(HISTORY_IMPORT_ATTEMPTS - 2):
+        await coordinator.async_refresh()
+        await _wait_for_statistics(hass)
+    supplier_api.async_get_meter_data.side_effect = _supplier(
+        ClientConnectionError(), newest=supplier_response([]),
+    )
+    await coordinator.async_refresh()
+    await _wait_for_statistics(hass)
+    assert "only the latest readings are imported" not in caplog.text
+
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    await coordinator.async_refresh()
+    await _wait_for_statistics(hass)
+
+    assert await _hourly_sums(hass) == pytest.approx([0.012, 0.018])
+    assert f"after {HISTORY_IMPORT_ATTEMPTS + 1} attempts, so only the latest readings" in caplog.text
+
+
+async def _fail_the_history_import_every_time(
+    hass: HomeAssistant, supplier_api: MagicMock,
+) -> MinvandforsyningCoordinator:
+    """Set up a meter whose history request fails until the stream has readings."""
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    for _ in range(HISTORY_IMPORT_ATTEMPTS - 1):
+        assert await _hourly_sums(hass) == []
+        await coordinator.async_refresh()
+        await _wait_for_statistics(hass)
+    return coordinator
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_history_that_keeps_failing_falls_back_to_the_newest_readings(
+    hass: HomeAssistant, supplier_api: MagicMock, caplog: pytest.LogCaptureFixture,
+) -> None:
+    coordinator = await _fail_the_history_import_every_time(hass, supplier_api)
+
+    # 12 L and then 6 L, counted from zero.
+    assert await _hourly_sums(hass) == pytest.approx([0.012, 0.018])
+    assert "the backfill service can import it later" in caplog.text
+    # Once the stream has readings, polls don't ask for the history again.
+    await coordinator.async_refresh()
+    await _wait_for_statistics(hass)
+    assert len(_history_requests(supplier_api)) == HISTORY_IMPORT_ATTEMPTS
+
+    # The README's recovery: rewrite the full history with the backfill service.
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKFILL_STATISTICS, {"days": 1825, "force_full": True}, blocking=True,
+    )
+    await _wait_for_statistics(hass)
+
+    sums = await _hourly_sums(hass)
+    assert len(sums) == 168
+    assert sums[-1] == pytest.approx(3.052)
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_deleted_statistics_get_new_history_attempts_after_a_fallback(
+    hass: HomeAssistant, supplier_api: MagicMock,
+) -> None:
+    coordinator = await _fail_the_history_import_every_time(hass, supplier_api)
+    assert len(await _hourly_sums(hass)) == 2
+    await coordinator.async_refresh()
+    await _wait_for_statistics(hass)
+
+    get_instance(hass).async_clear_statistics([_DEFAULT_STATISTIC_ID])
+    await async_wait_recording_done(hass)
+    await coordinator.async_refresh()
+    await _wait_for_statistics(hass)
+
+    # The failure is tried again at the next poll instead of falling back.
+    assert await _hourly_sums(hass) == []
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+    await coordinator.async_refresh()
+    await _wait_for_statistics(hass)
+    assert len(await _hourly_sums(hass)) == 168
+
+
+async def _set_up_again(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Reload the meter, which sets it up like a restart does."""
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await _wait_for_statistics(hass)
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_restarts_keep_counting_failed_history_imports(
+    hass: HomeAssistant, supplier_api: MagicMock,
+) -> None:
+    """Otherwise restarting often enough would keep the statistics empty."""
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    for _ in range(HISTORY_IMPORT_ATTEMPTS - 1):
+        assert await _hourly_sums(hass) == []
+        await _set_up_again(hass, entry)
+
+    assert await _hourly_sums(hass) == pytest.approx([0.012, 0.018])
+    assert len(_history_requests(supplier_api)) == HISTORY_IMPORT_ATTEMPTS
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_failed_history_imports_count_again_once_the_history_is_stored(
+    hass: HomeAssistant, supplier_api: MagicMock,
+) -> None:
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    # The supplier answers again, and the backfill service imports the history.
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+    await hass.services.async_call(
+        DOMAIN, SERVICE_BACKFILL_STATISTICS, {"days": 1825}, blocking=True,
+    )
+    await _wait_for_statistics(hass)
+    await coordinator.async_refresh()
+    await _wait_for_statistics(hass)
+
+    # Later the statistics are deleted while the supplier fails again.
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    get_instance(hass).async_clear_statistics([_DEFAULT_STATISTIC_ID])
+    await async_wait_recording_done(hass)
+    for _ in range(HISTORY_IMPORT_ATTEMPTS - 1):
+        await coordinator.async_refresh()
+        await _wait_for_statistics(hass)
+
+    # The failure before the history was stored doesn't count.
+    assert await _hourly_sums(hass) == []
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_removing_a_meter_removes_its_count_of_failed_history_imports(
+    hass: HomeAssistant, supplier_api: MagicMock, hass_storage: dict[str, Any],
+) -> None:
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    assert [key for key in hass_storage if entry.entry_id in key]
+
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert not [key for key in hass_storage if entry.entry_id in key]
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_removing_a_meter_during_its_history_import_stores_nothing(
+    hass: HomeAssistant, supplier_api: MagicMock, hass_storage: dict[str, Any],
+) -> None:
+    """The import mustn't outlive the meter, or it stores its count again."""
+    started, release = asyncio.Event(), asyncio.Event()
+    newest = _supplier()
+
+    async def respond(meter_number, supplier_id, date_from, date_to, **kwargs):
+        if (date_to - date_from).days <= 30:
+            return newest(meter_number, supplier_id, date_from, date_to)
+        started.set()
+        await release.wait()
+        raise ClientConnectionError
+
+    supplier_api.async_get_meter_data.side_effect = respond
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=_DEFAULT_METER,
+        data={"meter_number": _DEFAULT_METER, "supplier_id": 1},
+        options={"import_statistics": True},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    async with asyncio.timeout(10):
+        await started.wait()
+
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    release.set()
+    await _wait_for_statistics(hass)
+
+    assert not [key for key in hass_storage if entry.entry_id in key]
+
+
+def _hourly_readings(start: datetime, hours: int) -> list[tuple[datetime, str, str]]:
+    """Hourly readings of 10 L each, as the supplier reports them."""
+    return [
+        (start + timedelta(hours=hour), f"{100 + (hour + 1) / 100:.3f}", "10")
+        for hour in range(hours)
+    ]
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_polls_import_readings_that_the_supplier_publishes_days_late(
+    hass: HomeAssistant, supplier_api: MagicMock, entity_registry: er.EntityRegistry,
+) -> None:
+    """Setup accepts a meter whose newest reading is days old, so polls must too."""
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    readings = _hourly_readings(now - timedelta(days=20), 20 * 24)
+    published_until = now - timedelta(days=4)
+
+    def respond(meter_number, supplier_id, date_from, date_to, **kwargs):
+        # The API returns the published readings between the two dates.
+        return supplier_response([
+            reading
+            for reading in readings
+            if date_from.date() <= reading[0].date() < date_to.date()
+            and reading[0] <= published_until
+        ])
+
+    supplier_api.async_get_meter_data.side_effect = respond
+    entry = await _set_up_meter(hass)
+    stored = len(await _hourly_sums(hass))
+
+    # The supplier publishes another day of readings.
+    published_until = now - timedelta(days=3)
+    await hass.data[DOMAIN][entry.entry_id].async_refresh()
+    await _wait_for_statistics(hass)
+
+    assert len(await _hourly_sums(hass)) == stored + 24
+    total = entity_registry.async_get_entity_id("sensor", DOMAIN, f"{_DEFAULT_METER}_total")
+    newest = next(reading for reading in reversed(readings) if reading[0] <= published_until)
+    assert float(hass.states.get(total).state) == pytest.approx(float(newest[1]))
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_reading_dated_in_the_future_does_not_stop_the_statistics(
+    hass: HomeAssistant, supplier_api: MagicMock, entity_registry: er.EntityRegistry,
+) -> None:
+    """Imports continue after the newest stored hour, so a future one would hide the rest."""
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    readings = _hourly_readings(now - timedelta(days=2), 24)
+    broken = (now + timedelta(days=30), "999.000", "1")
+    published = readings[:12]
+
+    def respond(meter_number, supplier_id, date_from, date_to, **kwargs):
+        return supplier_response([*published, broken])
+
+    supplier_api.async_get_meter_data.side_effect = respond
+    entry = await _set_up_meter(hass)
+    assert len(await _hourly_sums(hass)) == 12
+
+    published = readings
+    await hass.data[DOMAIN][entry.entry_id].async_refresh()
+    await _wait_for_statistics(hass)
+
+    assert len(await _hourly_sums(hass)) == 24
+    total = entity_registry.async_get_entity_id("sensor", DOMAIN, f"{_DEFAULT_METER}_total")
+    assert float(hass.states.get(total).state) == pytest.approx(float(readings[-1][1]))
+
+
+@pytest.mark.parametrize("import_statistics", [True, False])
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_meter_number_that_cannot_be_a_statistic_id_skips_statistics(
+    hass: HomeAssistant,
+    supplier_api: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    import_statistics: bool,
+) -> None:
+    """The recorder would reject every import, so none is tried."""
+    # Statistic IDs only allow lowercase letters, digits and underscores.
+    meter = "AB-12345"
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=meter,
+        data={"meter_number": meter, "supplier_id": 1},
+        options={"import_statistics": import_statistics},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await _wait_for_statistics(hass)
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    for _ in range(3):
+        await coordinator.async_refresh()
+        await _wait_for_statistics(hass)
+
+    assert _history_requests(supplier_api) == []
+    assert "Failed to import long-term statistics" not in caplog.text
+    stream = f"{DOMAIN}:water_meter_{meter}_total"
+    expected_warnings = 1 if import_statistics else 0
+    assert caplog.text.count(f"Not importing the statistics stream {stream}") == expected_warnings
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_backfill_skips_a_meter_that_cannot_have_statistics(
+    hass: HomeAssistant, supplier_api: MagicMock, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The recorder would reject the import, so the history isn't requested."""
+    meter = "AB-12345"
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=meter, data={"meter_number": meter, "supplier_id": 1},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await _wait_for_statistics(hass)
+    requests = supplier_api.async_get_meter_data.await_count
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN, SERVICE_BACKFILL_STATISTICS, {"days": 1825}, blocking=True,
+        )
+
+    assert supplier_api.async_get_meter_data.await_count == requests
+    assert f"Backfill: skipping meter {meter}" in caplog.text
+
+
+@dataclass(slots=True)
+class _BusyRecorderTask(RecorderTask):
+    """Keep the recorder busy until released, like a long write."""
+
+    started: threading.Event
+    release: threading.Event
+
+    def run(self, instance: Any) -> None:
+        self.started.set()
+        self.release.wait(30)
+
+
+@pytest.mark.usefixtures("recorder_mock")
+async def test_a_poll_during_a_backfill_continues_from_the_backfilled_sum(
+    hass: HomeAssistant, supplier_api: MagicMock,
+) -> None:
+    """An import must be stored before the next import reads where to continue."""
+    # A first install whose history request failed, so the stream is empty.
+    supplier_api.async_get_meter_data.side_effect = _supplier(ClientConnectionError())
+    entry = await _set_up_meter(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    supplier_api.async_get_meter_data.side_effect = _supplier()
+    history = await coordinator.async_fetch_window(1825)
+    next_hour = MinvandforsyningData([_reading(2026, 3, 31, 0, "103.059", "7")])
+
+    queued = asyncio.Event()
+
+    def add_and_signal(*args: Any) -> None:
+        async_add_external_statistics(*args)
+        queued.set()
+
+    started, release = threading.Event(), threading.Event()
+    try:
+        get_instance(hass).queue_task(_BusyRecorderTask(started, release))
+        assert await hass.async_add_executor_job(started.wait, 10)
+        with patch(
+            "custom_components.minvandforsyning.coordinator.async_add_external_statistics",
+            side_effect=add_and_signal,
+        ):
+            backfill = hass.async_create_task(
+                coordinator.async_import_readings(history, force_full=True),
+            )
+            async with asyncio.timeout(10):
+                await queued.wait()
+            for _ in range(5):
+                await asyncio.sleep(0)
+            # The recorder hasn't stored the backfill yet, so a poll that ran
+            # now would continue from the sum stored before it.
+            assert not backfill.done()
+
+            poll = hass.async_create_task(coordinator.async_import_readings(next_hour))
+            release.set()
+            await asyncio.gather(backfill, poll)
+    finally:
+        release.set()
+    await async_wait_recording_done(hass)
+
+    sums = await _hourly_sums(hass)
+    assert len(sums) == 169
+    assert sums[-2:] == pytest.approx([3.052, 3.059])
+
+
+@pytest.mark.usefixtures("recorder_mock", "supplier_api")
+async def test_an_import_with_nothing_new_does_not_wait_for_the_recorder(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _set_up_meter(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    stored = coordinator.data
+
+    started, release = threading.Event(), threading.Event()
+    try:
+        get_instance(hass).queue_task(_BusyRecorderTask(started, release))
+        assert await hass.async_add_executor_job(started.wait, 10)
+        # The recorder only makes callers wait while work is queued, so queue
+        # some behind the busy task, as on a live system.
+        get_instance(hass).queue_task(_BusyRecorderTask(threading.Event(), release))
+        # Every reading is stored already, so there's nothing to wait for.
+        async with asyncio.timeout(10):
+            await coordinator.async_import_readings(stored)
+    finally:
+        release.set()
 
 
 # ---------------------------------------------------------------------------
@@ -724,7 +1367,49 @@ class TestHourAlignment:
         assert start.minute == 0
         assert start.second == 0
         assert start.microsecond == 0
-        assert any("not on the hour" in message for message in caplog.messages)
+        assert any("aren't on the hour" in message for message in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_off_hour_readings_log_one_warning_per_import(self, caplog):
+        """A warning per reading would repeat for every reading of a 5-year history."""
+        coord = _make_coordinator()
+        data = MinvandforsyningData([
+            MeterReading(
+                date=datetime(2026, 4, 11, hour, 42),
+                reading=Decimal(100 + hour),
+                consumption=Decimal("10"),
+            )
+            for hour in range(5)
+        ])
+
+        with caplog.at_level(logging.WARNING), _RecorderPatches() as p:
+            await coord.async_import_readings(data)
+
+        assert len(p.import_stats.call_args[0][2]) == 5
+        warnings = [message for message in caplog.messages if "on the hour" in message]
+        assert warnings == [
+            f"Readings for meter {coord.meter_number} that aren't on the hour: 5. "
+            "Each is stored in the hour its interval starts in"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_stored_off_hour_readings_do_not_warn_again(self, caplog):
+        """Every poll gets the last 7 days again."""
+        coord = _make_coordinator()
+        reading = MeterReading(
+            date=datetime(2026, 4, 11, 10, 42), reading=Decimal("100"), consumption=Decimal("10"),
+        )
+        stored = {
+            coord.statistic_id: [{
+                "start": datetime(2026, 4, 11, 9, tzinfo=timezone.utc).timestamp(),
+                "sum": 0.01,
+            }],
+        }
+
+        with caplog.at_level(logging.WARNING), _RecorderPatches(last_stats=stored):
+            await coord.async_import_readings(MinvandforsyningData([reading]))
+
+        assert not [message for message in caplog.messages if "on the hour" in message]
 
 
 # ---------------------------------------------------------------------------
@@ -871,11 +1556,11 @@ class TestBackfillService:
     @pytest.mark.asyncio
     async def test_backfill_service_filters_by_meter_number(self):
         """A service call with meter_number only targets that coordinator."""
-        coord_a = _make_coordinator(meter="AAA")
+        coord_a = _make_coordinator(meter="aaa")
         coord_a.data = MinvandforsyningData(_sample_readings())
         coord_a.async_import_readings = AsyncMock()
 
-        coord_b = _make_coordinator(meter="BBB")
+        coord_b = _make_coordinator(meter="bbb")
         coord_b.data = MinvandforsyningData(_sample_readings())
         coord_b.async_import_readings = AsyncMock()
 
@@ -891,7 +1576,7 @@ class TestBackfillService:
         assert captured_handler, "service handler not captured"
 
         call = MagicMock()
-        call.data = {"meter_number": "AAA"}
+        call.data = {"meter_number": "aaa"}
         await captured_handler[0](call)
 
         coord_a.async_import_readings.assert_awaited_once()
@@ -902,11 +1587,11 @@ class TestBackfillService:
     @pytest.mark.asyncio
     async def test_backfill_service_targets_all_when_no_filter(self):
         """Omitting meter_number backfills every configured coordinator."""
-        coord_a = _make_coordinator(meter="AAA")
+        coord_a = _make_coordinator(meter="aaa")
         coord_a.data = MinvandforsyningData(_sample_readings())
         coord_a.async_import_readings = AsyncMock()
 
-        coord_b = _make_coordinator(meter="BBB")
+        coord_b = _make_coordinator(meter="bbb")
         coord_b.data = MinvandforsyningData(_sample_readings())
         coord_b.async_import_readings = AsyncMock()
 
@@ -930,7 +1615,7 @@ class TestBackfillService:
     async def test_backfill_unknown_meter_warns_and_no_import(self, caplog):
         """meter_number filter with no match must log a warning and not
         invoke any coordinator's import path."""
-        coord = _make_coordinator(meter="AAA")
+        coord = _make_coordinator(meter="aaa")
         coord.data = MinvandforsyningData(_sample_readings())
         coord.async_import_readings = AsyncMock()
 
@@ -957,11 +1642,11 @@ class TestBackfillService:
     @pytest.mark.asyncio
     async def test_backfill_continues_on_per_meter_failure(self, caplog):
         """If one coordinator's import raises, remaining ones must still run."""
-        good = _make_coordinator(meter="GOOD")
+        good = _make_coordinator(meter="good")
         good.data = MinvandforsyningData(_sample_readings())
         good.async_import_readings = AsyncMock()
 
-        bad = _make_coordinator(meter="BAD")
+        bad = _make_coordinator(meter="bad")
         bad.data = MinvandforsyningData(_sample_readings())
         bad.async_import_readings = AsyncMock(side_effect=RuntimeError("boom"))
 
@@ -982,7 +1667,7 @@ class TestBackfillService:
 
         bad.async_import_readings.assert_awaited_once()
         good.async_import_readings.assert_awaited_once()
-        assert any("Backfill failed for meter BAD" in rec.message for rec in caplog.records)
+        assert any("Backfill failed for meter bad" in rec.message for rec in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -1004,7 +1689,7 @@ class TestHydrate:
         coord.async_fetch_window = AsyncMock(return_value=sample)
 
         with _RecorderPatches(last_stats={}) as p:
-            await coord.async_hydrate()
+            assert await coord.async_hydrate() is True
 
         coord.async_fetch_window.assert_awaited_once_with(INITIAL_HYDRATE_DAYS)
         assert p.import_stats.call_count == 1
@@ -1020,7 +1705,7 @@ class TestHydrate:
         last_stats = {_DEFAULT_STATISTIC_ID: [{"start": cutoff_ts, "sum": 99.0}]}
 
         with _RecorderPatches(last_stats=last_stats) as p:
-            await coord.async_hydrate()
+            assert await coord.async_hydrate() is False
 
         coord.async_fetch_window.assert_not_awaited()
         assert p.import_stats.call_count == 0
@@ -1070,20 +1755,6 @@ class TestHydrate:
         assert p.import_stats.call_count == 0
 
     @pytest.mark.asyncio
-    async def test_safe_hydrate_swallows_exceptions(self, caplog):
-        """_safe_hydrate must never propagate — hydrate is opportunistic."""
-        coord = _make_coordinator()
-        coord.async_hydrate = AsyncMock(side_effect=RuntimeError("kaboom"))
-
-        with caplog.at_level("WARNING", logger="custom_components.minvandforsyning.coordinator"):
-            await coord._safe_hydrate()  # must NOT raise
-
-        coord.async_hydrate.assert_awaited_once()
-        assert any(
-            "Initial hydrate failed" in rec.message for rec in caplog.records
-        )
-
-    @pytest.mark.asyncio
     async def test_hydrate_with_no_readings_logs_warning_and_does_not_import(
         self, caplog,
     ):
@@ -1095,7 +1766,8 @@ class TestHydrate:
             with caplog.at_level(
                 "WARNING", logger="custom_components.minvandforsyning.coordinator",
             ):
-                await coord.async_hydrate()
+                # An empty history is only an error when readings are required.
+                assert await coord.async_hydrate() is False
 
         assert p.import_stats.call_count == 0
         assert any(
@@ -1127,7 +1799,7 @@ class TestBackfillServiceFreshFetch:
     @pytest.mark.asyncio
     async def test_service_with_days_triggers_fresh_fetch(self):
         """days=365 → coord.async_fetch_window(365) awaited, result imported."""
-        coord = _make_coordinator(meter="AAA")
+        coord = _make_coordinator(meter="aaa")
         fetched = MinvandforsyningData(_sample_readings())
         coord.async_fetch_window = AsyncMock(return_value=fetched)
         coord.async_import_readings = AsyncMock()
@@ -1148,7 +1820,7 @@ class TestBackfillServiceFreshFetch:
     @pytest.mark.asyncio
     async def test_service_without_days_uses_cache_unchanged_behavior(self):
         """No days → no fresh fetch; replay coord.data verbatim."""
-        coord = _make_coordinator(meter="AAA")
+        coord = _make_coordinator(meter="aaa")
         coord.data = MinvandforsyningData(_sample_readings())
         coord.async_fetch_window = AsyncMock()
         coord.async_import_readings = AsyncMock()
@@ -1169,7 +1841,7 @@ class TestBackfillServiceFreshFetch:
     @pytest.mark.asyncio
     async def test_service_force_full_passes_through(self):
         """force_full=True propagates to async_import_readings as a kwarg."""
-        coord = _make_coordinator(meter="AAA")
+        coord = _make_coordinator(meter="aaa")
         coord.data = MinvandforsyningData(_sample_readings())
         coord.async_import_readings = AsyncMock()
 
@@ -1188,7 +1860,7 @@ class TestBackfillServiceFreshFetch:
     @pytest.mark.asyncio
     async def test_service_without_days_and_no_cache_warns_and_skips(self, caplog):
         """No days + coord.data is None → warning, no import, no exception."""
-        coord = _make_coordinator(meter="AAA")
+        coord = _make_coordinator(meter="aaa")
         coord.data = None  # coordinator hasn't completed first refresh
         coord.async_fetch_window = AsyncMock()
         coord.async_import_readings = AsyncMock()
@@ -1276,8 +1948,9 @@ class _capture_background_tasks:
         self.captured: list[Any] = []
 
     def __enter__(self) -> list[Any]:
-        def _schedule(coro: Any, name: str | None = None) -> None:
+        def _schedule(coro: Any, name: str | None = None, eager_start: bool = True) -> MagicMock:
             self.captured.append(coro)
+            return MagicMock()
 
         self._hass.async_create_background_task = MagicMock(side_effect=_schedule)
         return self.captured

@@ -1,6 +1,9 @@
 {
   "domain": "minvandforsyning",
   "name": "MinVandforsyning",
+  "categories": [
+    "water.meters_leak_detection"
+  ],
   "codeowners": [
     "@hugo-brito"
   ],

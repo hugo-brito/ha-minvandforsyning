@@ -12,7 +12,7 @@ jobs:
     name: HACS Validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: hacs/action@main
         with:
           category: integration
@@ -21,16 +21,20 @@ jobs:
     name: Hassfest Validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: home-assistant/actions/hassfest@master  # no stable tags available
 
   tests:
     name: Tests
     runs-on: ubuntu-latest
+    # A test that hangs would otherwise hold the runner for 6 hours.
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
-      - run: pip install pytest pytest-asyncio aiohttp homeassistant
+          python-version: "3.14"
+      # Test the minimum Home Assistant version from hacs.json. The official
+      # test package has the same version as Home Assistant and pins pytest.
+      - run: pip install "pytest-homeassistant==2026.11.0"
       - run: pytest tests/ -v
