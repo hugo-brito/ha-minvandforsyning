@@ -301,6 +301,20 @@ async def test_a_short_rate_limit_does_not_poll_sooner_than_usual(
 
 
 @pytest.mark.usefixtures("recorder_mock")
+async def test_the_longest_pause_does_not_make_a_poll_come_sooner(
+    hass: HomeAssistant, meter_api: MagicMock,
+) -> None:
+    """The polling interval stays the shortest wait, even above the longest pause."""
+    with patch(
+        "custom_components.minvandforsyning.coordinator.RATE_LIMIT_MAX_PAUSE_SECONDS", 1800,
+    ):
+        requests = await _rate_limit_a_poll(hass, meter_api, 30 * 86400)
+
+    assert await _requests_after(hass, meter_api, timedelta(minutes=59)) == requests
+    assert await _requests_after(hass, meter_api, timedelta(hours=1, minutes=1)) == requests + 1
+
+
+@pytest.mark.usefixtures("recorder_mock")
 async def test_a_rate_limited_setup_is_retried_when_the_api_asks(
     hass: HomeAssistant, meter_api: MagicMock,
 ) -> None:
@@ -344,7 +358,7 @@ async def test_a_connection_error_message_leaves_out_the_meter_number(
     error: Exception,
     shown: str,
 ) -> None:
-    """The message is shown on the integrations page and in the error log.
+    """Home Assistant logs this message, and shows it on the integrations page when setup fails.
 
     aiohttp's text for some errors has the request URL, with the meter number.
     """

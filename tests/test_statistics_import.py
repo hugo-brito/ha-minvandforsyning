@@ -806,6 +806,29 @@ async def test_a_meter_without_readings_does_not_count_failed_history_imports(
     assert not [key for key in hass_storage if entry.entry_id in key]
 
 
+@pytest.mark.usefixtures("recorder_mock")
+async def test_polls_without_readings_keep_the_count_of_failed_history_imports(
+    hass: HomeAssistant, supplier_api: MagicMock, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Otherwise newest readings that come and go would keep the statistics empty."""
+    with_readings = _supplier(history=supplier_response([]))
+    supplier_api.async_get_meter_data.side_effect = with_readings
+    entry = await _set_up_meter(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    for _ in range(HISTORY_IMPORT_ATTEMPTS - 1):
+        supplier_api.async_get_meter_data.side_effect = (
+            lambda *args, **kwargs: supplier_response([])
+        )
+        await coordinator.async_refresh()
+        await _wait_for_statistics(hass)
+        supplier_api.async_get_meter_data.side_effect = with_readings
+        await coordinator.async_refresh()
+        await _wait_for_statistics(hass)
+
+    assert await _hourly_sums(hass) == pytest.approx([0.012, 0.018])
+    assert f"after {HISTORY_IMPORT_ATTEMPTS} attempts" in caplog.text
+
+
 async def _fail_the_history_import_every_time(
     hass: HomeAssistant, supplier_api: MagicMock,
 ) -> MinvandforsyningCoordinator:

@@ -232,12 +232,13 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         """Return how long Home Assistant should wait after a rate limit."""
         if err.status != 429 or (seconds := retry_after_seconds(err.headers)) is None:
             return None
+        # Home Assistant limits the wait of a setup retry, but not of a poll.
+        seconds = min(seconds, RATE_LIMIT_MAX_PAUSE_SECONDS)
         if self.data is not None and self.update_interval:
             # After setup, Home Assistant polls again after this delay instead
             # of the interval, which must stay the shortest wait.
             seconds = max(seconds, self.update_interval.total_seconds())
-        # Home Assistant limits the wait of a setup retry, but not of a poll.
-        return min(seconds, RATE_LIMIT_MAX_PAUSE_SECONDS)
+        return seconds
 
     async def _async_update_data(self) -> MinvandforsyningData:
         """Fetch and parse meter data for the routine poll window."""
@@ -274,7 +275,8 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
         these readings. Storing these first would make the history import
         skip everything older, so after a failed history import they wait for
         the next poll to try again, up to HISTORY_IMPORT_ATTEMPTS in a row.
-        A history without readings fails too, unless these have none either.
+        A history without readings fails too, unless these have none either;
+        then nothing is imported, and the count stays as it is.
         """
         if not self._can_store_statistics:
             return
@@ -301,6 +303,9 @@ class MinvandforsyningCoordinator(DataUpdateCoordinator[MinvandforsyningData]):
                 exc_info=True,
             )
             imported_history = False
+        else:
+            if not imported_history and not data.readings:
+                return
         await self._async_set_failed_history_imports(0)
         if imported_history:
             return
